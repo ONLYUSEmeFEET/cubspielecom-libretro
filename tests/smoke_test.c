@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
     for (int f = 0; f < frames; f++) {
         audio->out_frames = 0;
         sm8521_run_frame(cpu);
-        gamecom_lcd_render(lcd, cpu->display_buffer, false, 0, 0);
+        gamecom_lcd_render(lcd, cpu->display_buffer, TOUCH_OVERLAY_OFF, false, 0, 0);
         total_audio_frames += audio->out_frames;
         for (size_t i = 0; i < audio->out_frames * 2; i++) {
             if (audio->out_stereo[i] != 0) non_zero_audio++;

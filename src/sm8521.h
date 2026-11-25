@@ -125,7 +125,7 @@ typedef struct {
 
 typedef struct SM8521 SM8521;
 
-typedef void (*sm8521_dac_cb_t)(void *userdata, uint8_t val, uint32_t hw_rate);
+typedef void (*sm8521_dac_cb_t)(void *userdata, uint8_t val, uint64_t cycles);
 typedef void (*sm8521_sound_reg_cb_t)(void *userdata, const GameComAudioRegs *regs, uint64_t cycles);
 typedef void (*sm8521_audio_frame_cb_t)(void *userdata, uint64_t cycles);
 typedef void (*sm8521_bios_clip_cb_t)(void *userdata, const uint8_t *samples, size_t len, uint8_t bank);

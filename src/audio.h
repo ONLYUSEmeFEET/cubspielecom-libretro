@@ -45,14 +45,11 @@ typedef struct {
     float    tone_dc_prev_x;
     float    tone_dc_prev_y;
 
-    /* SGDA ($004E) DAC ring buffer (already resampled to 44.1 kHz) */
-    float    dac_ring[GAMECOM_DAC_RING_SIZE];
-    uint32_t dac_read_pos;
-    uint32_t dac_write_pos;
+    /* Cycle-accurate SGDA ($004E) 8-bit DAC latch state */
+    float    dac_level;
     float    dac_dc_prev_x;
     float    dac_dc_prev_y;
-    float    dac_prev_sample;
-    double   dac_frac_accum;
+    bool     dac_active;
 
     /* BIOS digitized 4-bit clip ring buffer (resampled to 44.1 kHz) */
     float    clip_ring[GAMECOM_CLIP_RING_SIZE];
@@ -75,7 +72,7 @@ void gamecom_audio_init(GameComAudio *audio);
 void gamecom_audio_reset(GameComAudio *audio);
 
 void gamecom_audio_on_reg_write(void *userdata, const GameComAudioRegs *regs, uint64_t cycles);
-void gamecom_audio_on_dac_sample(void *userdata, uint8_t val, uint32_t hw_rate);
+void gamecom_audio_on_dac_sample(void *userdata, uint8_t val, uint64_t cycles);
 void gamecom_audio_on_bios_clip(void *userdata, const uint8_t *samples, size_t len, uint8_t bank);
 void gamecom_audio_end_frame(void *userdata, uint64_t cycles);
 

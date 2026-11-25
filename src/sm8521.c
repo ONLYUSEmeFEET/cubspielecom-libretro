@@ -423,29 +423,9 @@ static void program_write_byte(SM8521 *cpu, uint16_t addr, uint8_t data) {
                     if (cpu->on_sound_reg_write) cpu->on_sound_reg_write(cpu->cb_userdata, &cpu->m_sound, cpu->cycles);
                     break;
                 case SM8521_SGDA: {
-                    uint8_t prev_sgda = cpu->m_sound.sgda;
                     cpu->m_sound.sgda = data;
-                    if ((cpu->m_sound.sgc & 0x8Fu) == 0x88u && cpu->on_dac_sample) {
-                        uint64_t delta = cpu->cycles - cpu->last_dac_cycle;
-                        cpu->last_dac_cycle = cpu->cycles;
-                        if (delta >= 64) {
-                            uint32_t tm1d = cpu->m_timer[1].upcounter_max ? cpu->m_timer[1].upcounter_max : 208u;
-                            uint32_t prescale = cpu->m_timer[1].prescale_max ? cpu->m_timer[1].prescale_max : 1u;
-                            uint32_t div = cpu->m_p_ram[0xAC] ? cpu->m_p_ram[0xAC] : 3u;
-                            uint32_t period_cycles = tm1d * prescale * div;
-                            if (period_cycles < 128u) period_cycles = 128u;
-                            uint32_t hw_rate = (uint32_t)((SM8521_CPU_CLOCK_HZ + period_cycles / 2u) / period_cycles);
-                            if (hw_rate < 4000u) hw_rate = 4000u;
-                            if (hw_rate > 22050u) hw_rate = 22050u;
-                            if (delta > (uint64_t)period_cycles * 3u / 2u && delta <= (uint64_t)period_cycles * 48u) {
-                                uint32_t hold = (uint32_t)((delta + period_cycles / 2u) / period_cycles);
-                                if (hold > 48u) hold = 48u;
-                                for (uint32_t h = 1; h < hold; h++) {
-                                    cpu->on_dac_sample(cpu->cb_userdata, prev_sgda, hw_rate);
-                                }
-                            }
-                            cpu->on_dac_sample(cpu->cb_userdata, data, hw_rate);
-                        }
+                    if (cpu->on_dac_sample) {
+                        cpu->on_dac_sample(cpu->cb_userdata, data, cpu->cycles);
                     }
                     break;
                 }

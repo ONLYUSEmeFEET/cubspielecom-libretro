@@ -178,13 +178,6 @@ static inline void emit_stereo_sample(GameComAudio *a, float mono_sample) {
     a->out_frames++;
 }
 
-static inline float pop_dac_sample(GameComAudio *a) {
-    if (a->dac_read_pos == a->dac_write_pos) return 0.0f;
-    float v = a->dac_ring[a->dac_read_pos];
-    a->dac_read_pos = (a->dac_read_pos + 1u) % GAMECOM_DAC_RING_SIZE;
-    return v;
-}
-
 static inline float pop_clip_sample(GameComAudio *a) {
     if (a->clip_read_pos == a->clip_write_pos) return 0.0f;
     float v = a->clip_ring[a->clip_read_pos];
@@ -247,7 +240,13 @@ static void advance_audio_samples(GameComAudio *a, uint64_t target_cycles) {
         a->tone_dc_prev_x = tone_mix;
         a->tone_dc_prev_y = dc_free;
 
-        float dac = pop_dac_sample(a) * 0.72f;
+        /* Cycle-accurate SGDA ($004E) 8-bit DAC with 44.1 kHz coupling capacitor DC blocker */
+        float dac_in = ((sgc & 0x8Fu) == 0x88u && a->dac_active) ? a->dac_level : 0.0f;
+        float dac_dc = dac_in - a->dac_dc_prev_x + 0.997f * a->dac_dc_prev_y;
+        a->dac_dc_prev_x = dac_in;
+        a->dac_dc_prev_y = dac_dc;
+        float dac = dac_dc * 0.72f;
+
         float clip = pop_clip_sample(a) * 0.55f;
         float total = dc_free * 0.72f + dac + clip;
         emit_stereo_sample(a, total);
@@ -325,36 +324,11 @@ void gamecom_audio_on_reg_write(void *userdata, const GameComAudioRegs *regs, ui
     }
 }
 
-void gamecom_audio_on_dac_sample(void *userdata, uint8_t val, uint32_t hw_rate) {
+void gamecom_audio_on_dac_sample(void *userdata, uint8_t val, uint64_t cycles) {
     GameComAudio *a = (GameComAudio *)userdata;
-    if (hw_rate < 2000) hw_rate = 7877;
-
-    float quantized = ((float)val - 128.0f) / 128.0f;
-    float dc_free = quantized - a->dac_dc_prev_x + 0.994f * a->dac_dc_prev_y;
-    a->dac_dc_prev_x = quantized;
-    a->dac_dc_prev_y = dc_free;
-    float cur = dc_free * 0.85f;
-    if (cur > 1.0f) cur = 1.0f;
-    else if (cur < -1.0f) cur = -1.0f;
-
-    double ratio = (double)GAMECOM_AUDIO_SAMPLE_RATE / (double)hw_rate;
-    a->dac_frac_accum += ratio;
-    int emit_count = (int)a->dac_frac_accum;
-    a->dac_frac_accum -= (double)emit_count;
-
-    float prev = a->dac_prev_sample;
-    for (int i = 0; i < emit_count; i++) {
-        float t = (emit_count > 1) ? ((float)i / (float)emit_count) : 1.0f;
-        /* 65% linear + 35% ZOH staircase for authentic 8-bit DAC texture */
-        float interp = prev + (cur - prev) * t;
-        float out = 0.65f * interp + 0.35f * cur;
-        uint32_t next_w = (a->dac_write_pos + 1u) % GAMECOM_DAC_RING_SIZE;
-        if (next_w != a->dac_read_pos) {
-            a->dac_ring[a->dac_write_pos] = out;
-            a->dac_write_pos = next_w;
-        }
-    }
-    a->dac_prev_sample = cur;
+    advance_audio_samples(a, cycles);
+    a->dac_level = ((float)val - 128.0f) / 128.0f;
+    a->dac_active = true;
 }
 
 void gamecom_audio_on_bios_clip(void *userdata, const uint8_t *samples, size_t len, uint8_t bank) {

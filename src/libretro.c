@@ -21,7 +21,7 @@ static SM8521       g_cpu;
 static GameComLCD   g_lcd;
 static GameComAudio g_audio;
 static bool         g_bios_loaded = false;
-static bool         g_draw_touch_cursor = true;
+static GameComTouchOverlay g_touch_overlay = TOUCH_OVERLAY_CELL_HIGHLIGHT;
 static bool         g_touch_single_click = true;
 static bool         g_native_74hz_timing = false;
 static bool         g_prev_pointer_down = false;
@@ -29,6 +29,8 @@ static int          g_click_pulse_frames = 0;
 static bool         g_pointer_active = false;
 static int16_t      g_last_cursor_x = SM8521_SCREEN_WIDTH / 2;
 static int16_t      g_last_cursor_y = SM8521_SCREEN_HEIGHT / 2;
+static int16_t      g_locked_click_x = 0;
+static int16_t      g_locked_click_y = 0;
 
 #define RETRO_SUBSYSTEM_DUAL_CART 1u
 
@@ -193,7 +195,10 @@ static void check_variables(void) {
     var.key = "cubspielecom_touch_cursor";
     var.value = NULL;
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
-        g_draw_touch_cursor = (strcmp(var.value, "enabled") == 0);
+        if (strcmp(var.value, "full_grid") == 0) g_touch_overlay = TOUCH_OVERLAY_FULL_GRID;
+        else if (strcmp(var.value, "crosshair") == 0) g_touch_overlay = TOUCH_OVERLAY_CROSSHAIR;
+        else if (strcmp(var.value, "disabled") == 0) g_touch_overlay = TOUCH_OVERLAY_OFF;
+        else g_touch_overlay = TOUCH_OVERLAY_CELL_HIGHLIGHT;
     }
 
     var.key = "cubspielecom_touch_mode";
@@ -234,7 +239,7 @@ RETRO_API void retro_set_environment(retro_environment_t cb) {
             { "cubspielecom_ghosting", "STN LCD Ghosting; off|light|medium|heavy" },
             { "cubspielecom_speaker_filter", "28mm Internal Speaker Filter; enabled|disabled" },
             { "cubspielecom_vsync", "Tear-Free V-Sync Latch; enabled|disabled" },
-            { "cubspielecom_touch_cursor", "Show Stylus Touch Crosshair; enabled|disabled" },
+            { "cubspielecom_touch_cursor", "Touch Grid & Cursor Overlay; cell_highlight|full_grid|crosshair|disabled" },
             { "cubspielecom_touch_mode", "Stylus Click Mode; single_click|hold" },
             { "cubspielecom_timing", "Frame Pacing (Restart/Live); 60hz_realtime|native_74hz" },
             { NULL, NULL }
@@ -436,11 +441,15 @@ RETRO_API void retro_run(void) {
 
         if (g_touch_single_click) {
             if (raw_down && !g_prev_pointer_down) {
-                /* Rising edge: fire a single 4-frame tap pulse so holding the mouse never auto-repeats */
+                /* Rising edge: lock click cell and fire a single 4-frame tap pulse */
                 g_click_pulse_frames = 4;
+                g_locked_click_x = g_last_cursor_x;
+                g_locked_click_y = g_last_cursor_y;
             }
             if (g_click_pulse_frames > 0) {
                 stylus_pressed = true;
+                stylus_x = g_locked_click_x;
+                stylus_y = g_locked_click_y;
                 g_click_pulse_frames--;
             } else {
                 stylus_pressed = false;
@@ -463,7 +472,7 @@ RETRO_API void retro_run(void) {
     }
 
     gamecom_lcd_render(&g_lcd, g_cpu.display_buffer,
-                       g_draw_touch_cursor && g_pointer_active, stylus_x, stylus_y);
+                       g_touch_overlay, g_pointer_active, g_last_cursor_x, g_last_cursor_y);
 
     if (video_cb) {
         video_cb(g_lcd.fb_xrgb8888, SM8521_SCREEN_WIDTH, SM8521_SCREEN_HEIGHT,

@@ -43,8 +43,16 @@ void gamecom_lcd_reset(GameComLCD *lcd) {
     memset(lcd->fb_xrgb8888, 0, sizeof(lcd->fb_xrgb8888));
 }
 
+static inline uint32_t blend_dark(uint32_t px, float amount) {
+    int r = (int)(((px >> 16) & 0xFF) * (1.0f - amount));
+    int g = (int)(((px >> 8) & 0xFF) * (1.0f - amount));
+    int b = (int)((px & 0xFF) * (1.0f - amount));
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
 void gamecom_lcd_render(GameComLCD *lcd, const uint8_t *display_buffer,
-                        bool draw_cursor, int16_t cursor_x, int16_t cursor_y) {
+                        GameComTouchOverlay overlay, bool pointer_active,
+                        int16_t cursor_x, int16_t cursor_y) {
     int pal_idx = (int)lcd->palette;
     if (pal_idx < 0 || pal_idx > 3) pal_idx = 0;
     const uint32_t *pal = PALETTE_TABLE[pal_idx];
@@ -79,8 +87,45 @@ void gamecom_lcd_render(GameComLCD *lcd, const uint8_t *display_buffer,
         }
     }
 
-    if (draw_cursor && cursor_x >= 0 && cursor_x < SM8521_SCREEN_WIDTH &&
+    /* Optional full 13x10 hardware touch grid (16x16 px cells) */
+    if (overlay == TOUCH_OVERLAY_FULL_GRID) {
+        for (int x = 16; x < SM8521_SCREEN_WIDTH; x += 16) {
+            for (int y = 0; y < SM8521_SCREEN_HEIGHT; y += 2) {
+                lcd->fb_xrgb8888[y * SM8521_SCREEN_WIDTH + x] =
+                    blend_dark(lcd->fb_xrgb8888[y * SM8521_SCREEN_WIDTH + x], 0.22f);
+            }
+        }
+        for (int y = 16; y < SM8521_SCREEN_HEIGHT; y += 16) {
+            for (int x = 0; x < SM8521_SCREEN_WIDTH; x += 2) {
+                lcd->fb_xrgb8888[y * SM8521_SCREEN_WIDTH + x] =
+                    blend_dark(lcd->fb_xrgb8888[y * SM8521_SCREEN_WIDTH + x], 0.22f);
+            }
+        }
+    }
+
+    if (pointer_active && overlay != TOUCH_OVERLAY_OFF &&
+        cursor_x >= 0 && cursor_x < SM8521_SCREEN_WIDTH &&
         cursor_y >= 0 && cursor_y < SM8521_SCREEN_HEIGHT) {
+
+        /* Draw active 16x16 hardware touch cell box so user sees exact target cell */
+        if (overlay == TOUCH_OVERLAY_CELL_HIGHLIGHT || overlay == TOUCH_OVERLAY_FULL_GRID) {
+            int x0 = (cursor_x / 16) * 16;
+            int y0 = (cursor_y / 16) * 16;
+            int x1 = x0 + 15;
+            int y1 = y0 + 15;
+            if (x1 >= SM8521_SCREEN_WIDTH) x1 = SM8521_SCREEN_WIDTH - 1;
+            if (y1 >= SM8521_SCREEN_HEIGHT) y1 = SM8521_SCREEN_HEIGHT - 1;
+            for (int x = x0; x <= x1; x++) {
+                lcd->fb_xrgb8888[y0 * SM8521_SCREEN_WIDTH + x] ^= 0x00404040u;
+                lcd->fb_xrgb8888[y1 * SM8521_SCREEN_WIDTH + x] ^= 0x00404040u;
+            }
+            for (int y = y0 + 1; y < y1; y++) {
+                lcd->fb_xrgb8888[y * SM8521_SCREEN_WIDTH + x0] ^= 0x00404040u;
+                lcd->fb_xrgb8888[y * SM8521_SCREEN_WIDTH + x1] ^= 0x00404040u;
+            }
+        }
+
+        /* Draw crisp crosshair at pointer position */
         for (int d = -3; d <= 3; d++) {
             int cx = cursor_x + d;
             int cy = cursor_y + d;

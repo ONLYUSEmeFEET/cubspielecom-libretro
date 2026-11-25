@@ -24,10 +24,18 @@ typedef struct {
     bool initialized;
 } GameComLCD;
 
+typedef enum {
+    TOUCH_OVERLAY_CELL_HIGHLIGHT = 0, /* Crosshair + active 16x16 hardware touch cell box */
+    TOUCH_OVERLAY_FULL_GRID = 1,      /* Subtle 13x10 grid + active cell box + crosshair */
+    TOUCH_OVERLAY_CROSSHAIR = 2,      /* Crosshair only */
+    TOUCH_OVERLAY_OFF = 3
+} GameComTouchOverlay;
+
 void gamecom_lcd_init(GameComLCD *lcd);
 void gamecom_lcd_reset(GameComLCD *lcd);
 void gamecom_lcd_render(GameComLCD *lcd, const uint8_t *display_buffer,
-                        bool draw_cursor, int16_t cursor_x, int16_t cursor_y);
+                        GameComTouchOverlay overlay, bool pointer_active,
+                        int16_t cursor_x, int16_t cursor_y);
 
 #ifdef __cplusplus
 }
