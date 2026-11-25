@@ -23,6 +23,7 @@ static GameComAudio g_audio;
 static bool         g_bios_loaded = false;
 static bool         g_draw_touch_cursor = true;
 static bool         g_touch_single_click = true;
+static bool         g_native_74hz_timing = false;
 static bool         g_prev_pointer_down = false;
 static int          g_click_pulse_frames = 0;
 static bool         g_pointer_active = false;
@@ -200,6 +201,18 @@ static void check_variables(void) {
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
         g_touch_single_click = (strcmp(var.value, "hold") != 0);
     }
+
+    var.key = "cubspielecom_timing";
+    var.value = NULL;
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        bool want_native = (strcmp(var.value, "native_74hz") == 0);
+        if (want_native != g_native_74hz_timing) {
+            g_native_74hz_timing = want_native;
+            struct retro_system_av_info av;
+            retro_get_system_av_info(&av);
+            environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av);
+        }
+    }
 }
 
 RETRO_API void retro_set_environment(retro_environment_t cb) {
@@ -223,6 +236,7 @@ RETRO_API void retro_set_environment(retro_environment_t cb) {
             { "cubspielecom_vsync", "Tear-Free V-Sync Latch; enabled|disabled" },
             { "cubspielecom_touch_cursor", "Show Stylus Touch Crosshair; enabled|disabled" },
             { "cubspielecom_touch_mode", "Stylus Click Mode; single_click|hold" },
+            { "cubspielecom_timing", "Frame Pacing (Restart/Live); 60hz_realtime|native_74hz" },
             { NULL, NULL }
         };
         cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void *)vars);
@@ -256,8 +270,13 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info *info) {
     info->geometry.max_width    = SM8521_SCREEN_WIDTH;
     info->geometry.max_height   = SM8521_SCREEN_HEIGHT;
     info->geometry.aspect_ratio = (float)SM8521_SCREEN_WIDTH / (float)SM8521_SCREEN_HEIGHT;
-    /* Native SM8521 LCH=$07 / LCV=$27 frame rate: 4,915,200 / (320 * 207) = 74.20289855 Hz */
-    info->timing.fps            = (double)SM8521_CPU_CLOCK_HZ / (320.0 * 207.0);
+    if (g_native_74hz_timing) {
+        /* Native SM8521 LCH=$07 / LCV=$27 frame rate: 4,915,200 / (320 * 207) = 74.20289855 Hz */
+        info->timing.fps = (double)SM8521_CPU_CLOCK_HZ / (320.0 * 207.0);
+    } else {
+        /* 60 Hz real-time pacing: 81,920 SM8521 cycles/frame = 100.0% real-time on all displays */
+        info->timing.fps = 60.0;
+    }
     info->timing.sample_rate    = (double)GAMECOM_AUDIO_SAMPLE_RATE;
 }
 
@@ -436,7 +455,12 @@ RETRO_API void retro_run(void) {
     sm8521_set_input(&g_cpu, buttons, stylus_pressed, stylus_x, stylus_y);
 
     g_audio.out_frames = 0;
-    sm8521_run_frame(&g_cpu);
+    if (g_native_74hz_timing) {
+        sm8521_run_frame(&g_cpu);
+    } else {
+        /* Exact 1/60s of 4.9152 MHz SM8521 hardware time = 81,920 cycles (exact 735 PCM samples) */
+        sm8521_run_cycles(&g_cpu, SM8521_CPU_CLOCK_HZ / 60u);
+    }
 
     gamecom_lcd_render(&g_lcd, g_cpu.display_buffer,
                        g_draw_touch_cursor && g_pointer_active, stylus_x, stylus_y);

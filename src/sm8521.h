@@ -179,6 +179,7 @@ struct SM8521 {
 
     /* LCD scanline & framebuffer (200x160 2-bpp shade values 0..3) */
     uint16_t m_scanline;
+    uint32_t scanline_cycle_accum;
     uint8_t  display_buffer[SM8521_SCREEN_WIDTH * SM8521_SCREEN_HEIGHT];
     uint8_t  committed_vram_page[0x2000];
     bool     committed_vram_valid;
@@ -215,6 +216,7 @@ void sm8521_unload_cartridge(SM8521 *cpu, int slot);
 void sm8521_set_input(SM8521 *cpu, uint32_t buttons_mask, bool stylus_pressed, int16_t stylus_x, int16_t stylus_y);
 uint32_t sm8521_step(SM8521 *cpu);
 void sm8521_run_frame(SM8521 *cpu);
+void sm8521_run_cycles(SM8521 *cpu, uint32_t target_cycles);
 
 uint8_t  sm8521_mem_readbyte(SM8521 *cpu, uint16_t offset);
 void     sm8521_mem_writebyte(SM8521 *cpu, uint16_t offset, uint8_t data);

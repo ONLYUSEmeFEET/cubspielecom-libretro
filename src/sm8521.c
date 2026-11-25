@@ -780,6 +780,7 @@ void sm8521_reset(SM8521 *cpu) {
     cpu->last_dac_cycle = 0;
     cpu->dma_count = 0;
     cpu->m_scanline = 0;
+    cpu->scanline_cycle_accum = 0;
     cpu->clock_timer_accum_cycles = 0;
     cpu->cartridge_executed_this_frame = false;
     cpu->committed_vram_valid = false;
@@ -1034,11 +1035,12 @@ void sm8521_run_frame(SM8521 *cpu) {
     uint32_t vblank_lines = (lcv == 0 && !lcd_enabled) ? 7u : (uint32_t)(lcv & 0x0Fu);
     if (vblank_lines < 1u) vblank_lines = 1u;
 
+    uint32_t line_cycles = 0;
     for (int line = 0; line < SM8521_SCREEN_WIDTH; line++) {
-        uint32_t line_cycles = 0;
         while (line_cycles < scanline_cycles) {
             line_cycles += sm8521_step(cpu);
         }
+        line_cycles -= scanline_cycles;
         if (!cpu->vsync_enabled) {
             render_scanline(cpu);
         }
@@ -1057,16 +1059,80 @@ void sm8521_run_frame(SM8521 *cpu) {
     }
 
     for (uint32_t vline = 0; vline < vblank_lines; vline++) {
-        uint32_t line_cycles = 0;
         while (line_cycles < scanline_cycles) {
             line_cycles += sm8521_step(cpu);
         }
+        line_cycles -= scanline_cycles;
     }
 
     uint32_t total_lines = SM8521_SCREEN_WIDTH + vblank_lines;
     cpu->last_hw_base_frame_cycles = total_lines * scanline_cycles;
     cpu->last_frame_cycles = cpu->last_hw_base_frame_cycles;
 
+    if (cpu->on_audio_frame_end) {
+        cpu->on_audio_frame_end(cpu->cb_userdata, cpu->cycles);
+    }
+}
+
+void sm8521_run_cycles(SM8521 *cpu, uint32_t target_cycles) {
+    cpu->cartridge_executed_this_frame =
+        cpu->mmu[1] >= 0x20u || cpu->mmu[2] >= 0x20u ||
+        cpu->mmu[3] >= 0x20u || cpu->mmu[4] >= 0x20u;
+
+    uint64_t end_cycles = cpu->cycles + target_cycles;
+
+    while (cpu->cycles < end_cycles) {
+        uint32_t c = sm8521_step(cpu);
+        cpu->scanline_cycle_accum += c;
+
+        bool lcd_enabled = (cpu->m_p_ram[SM8521_LCDC] & 0x80u) != 0;
+        uint8_t lch = cpu->m_p_ram[SM8521_LCH];
+        uint8_t lcv = cpu->m_p_ram[SM8521_LCV];
+
+        uint32_t scanline_cycles = (lch == 0 && !lcd_enabled)
+            ? 320u
+            : (uint32_t)(((lch & 0x20u) ? 50u : 40u) * ((lch & 0x1Fu) + 1u));
+        if (scanline_cycles < 200u) scanline_cycles = 200u;
+
+        uint32_t vblank_lines = (lcv == 0 && !lcd_enabled) ? 7u : (uint32_t)(lcv & 0x0Fu);
+        if (vblank_lines < 1u) vblank_lines = 1u;
+        uint32_t total_lines = SM8521_SCREEN_WIDTH + vblank_lines;
+
+        while (cpu->scanline_cycle_accum >= scanline_cycles) {
+            cpu->scanline_cycle_accum -= scanline_cycles;
+
+            if (cpu->m_scanline < SM8521_SCREEN_WIDTH) {
+                if (!cpu->vsync_enabled) {
+                    uint16_t cur_col = cpu->m_scanline;
+                    render_scanline(cpu);
+                    cpu->m_scanline = (uint16_t)(cur_col + 1u);
+                } else {
+                    cpu->m_scanline++;
+                }
+
+                if (cpu->m_scanline == SM8521_SCREEN_WIDTH) {
+                    cpu->committed_vram_valid = false;
+                    if (cpu->vsync_enabled) {
+                        cpu->m_scanline = 0;
+                        for (int line = 0; line < SM8521_SCREEN_WIDTH; line++) {
+                            render_scanline(cpu);
+                        }
+                        cpu->m_scanline = SM8521_SCREEN_WIDTH;
+                    }
+                    if (lcd_enabled) {
+                        set_input_line(cpu, SM8521_LCDC_INT, true);
+                    }
+                }
+            } else {
+                cpu->m_scanline++;
+                if (cpu->m_scanline >= total_lines) {
+                    cpu->m_scanline = 0;
+                }
+            }
+        }
+    }
+
+    cpu->last_frame_cycles = target_cycles;
     if (cpu->on_audio_frame_end) {
         cpu->on_audio_frame_end(cpu->cb_userdata, cpu->cycles);
     }
