@@ -89,6 +89,11 @@ typedef unsigned char bool;
 #define RETRO_DEVICE_ID_POINTER_PRESSED   2
 #define RETRO_DEVICE_ID_POINTER_COUNT     3
 
+#define RETRO_DEVICE_INDEX_ANALOG_LEFT    0
+#define RETRO_DEVICE_INDEX_ANALOG_RIGHT   1
+#define RETRO_DEVICE_ID_ANALOG_X          0
+#define RETRO_DEVICE_ID_ANALOG_Y          1
+
 #define RETRO_REGION_NTSC  0
 #define RETRO_REGION_PAL   1
 

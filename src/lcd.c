@@ -34,6 +34,7 @@ static inline uint32_t lerp_xrgb(uint32_t c0, uint32_t c1, float t) {
 void gamecom_lcd_init(GameComLCD *lcd) {
     memset(lcd, 0, sizeof(*lcd));
     lcd->palette = LCD_PALETTE_OLIVE;
+    lcd->contrast = 1.0f;
     lcd->ghosting = 0.0f;
     lcd->initialized = true;
 }
@@ -50,12 +51,26 @@ static inline uint32_t blend_dark(uint32_t px, float amount) {
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
 }
 
+static inline uint32_t apply_contrast_xrgb(uint32_t px, float contrast) {
+    if (contrast >= 0.995f && contrast <= 1.005f) return px;
+    int r = (int)((((int)((px >> 16) & 0xFF) - 128) * contrast) + 128.5f);
+    int g = (int)((((int)((px >> 8) & 0xFF) - 128) * contrast) + 128.5f);
+    int b = (int)((((int)(px & 0xFF) - 128) * contrast) + 128.5f);
+    if (r < 0) r = 0; else if (r > 255) r = 255;
+    if (g < 0) g = 0; else if (g > 255) g = 255;
+    if (b < 0) b = 0; else if (b > 255) b = 255;
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
 void gamecom_lcd_render(GameComLCD *lcd, const uint8_t *display_buffer,
                         GameComTouchOverlay overlay, bool pointer_active,
                         int16_t cursor_x, int16_t cursor_y) {
     int pal_idx = (int)lcd->palette;
     if (pal_idx < 0 || pal_idx > 3) pal_idx = 0;
-    const uint32_t *pal = PALETTE_TABLE[pal_idx];
+    uint32_t pal[4];
+    for (int i = 0; i < 4; i++) {
+        pal[i] = apply_contrast_xrgb(PALETTE_TABLE[pal_idx][i], lcd->contrast);
+    }
 
     float ghost = lcd->ghosting;
     if (ghost < 0.0f) ghost = 0.0f;

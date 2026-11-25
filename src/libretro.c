@@ -33,17 +33,27 @@ static bool         g_bios_loaded = false;
 static GameComTouchOverlay g_touch_overlay = TOUCH_OVERLAY_CELL_HIGHLIGHT;
 static bool         g_touch_single_click = true;
 static bool         g_native_74hz_timing = false;
+static bool         g_analog_stylus_enabled = true;
+static bool         g_fast_boot_enabled = false;
+static int          g_cursor_autohide_frames = 0; /* 0 = never hide */
+static int          g_cursor_idle_frames = 0;
 static bool         g_prev_pointer_down = false;
+static bool         g_prev_analog_click = false;
 static int          g_click_pulse_frames = 0;
 static int          g_click_release_frames = 0;
 static bool         g_pointer_active = false;
 static int16_t      g_last_cursor_x = SM8521_SCREEN_WIDTH / 2;
 static int16_t      g_last_cursor_y = SM8521_SCREEN_HEIGHT / 2;
+static float        g_analog_cursor_x = (float)(SM8521_SCREEN_WIDTH / 2);
+static float        g_analog_cursor_y = (float)(SM8521_SCREEN_HEIGHT / 2);
+static int16_t      g_prev_raw_px = 0;
+static int16_t      g_prev_raw_py = 0;
 static int16_t      g_locked_click_x = 0;
 static int16_t      g_locked_click_y = 0;
 static TouchTap     g_tap_queue[TAP_QUEUE_CAP];
 static int          g_tap_head = 0;
 static int          g_tap_tail = 0;
+static int          g_fast_boot_frames_left = 0;
 
 #define RETRO_SUBSYSTEM_DUAL_CART 1u
 
@@ -184,6 +194,15 @@ static void check_variables(void) {
         else g_lcd.palette = LCD_PALETTE_OLIVE;
     }
 
+    var.key = "cubspielecom_contrast";
+    var.value = NULL;
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        if (strcmp(var.value, "115") == 0) g_lcd.contrast = 1.15f;
+        else if (strcmp(var.value, "85") == 0) g_lcd.contrast = 0.85f;
+        else if (strcmp(var.value, "70") == 0) g_lcd.contrast = 0.70f;
+        else g_lcd.contrast = 1.0f;
+    }
+
     var.key = "cubspielecom_ghosting";
     var.value = NULL;
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
@@ -214,10 +233,30 @@ static void check_variables(void) {
         else g_touch_overlay = TOUCH_OVERLAY_CELL_HIGHLIGHT;
     }
 
+    var.key = "cubspielecom_cursor_autohide";
+    var.value = NULL;
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        if (strcmp(var.value, "3s") == 0) g_cursor_autohide_frames = 180;
+        else if (strcmp(var.value, "5s") == 0) g_cursor_autohide_frames = 300;
+        else g_cursor_autohide_frames = 0;
+    }
+
     var.key = "cubspielecom_touch_mode";
     var.value = NULL;
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
         g_touch_single_click = (strcmp(var.value, "hold") != 0);
+    }
+
+    var.key = "cubspielecom_analog_stylus";
+    var.value = NULL;
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        g_analog_stylus_enabled = (strcmp(var.value, "disabled") != 0);
+    }
+
+    var.key = "cubspielecom_fast_boot";
+    var.value = NULL;
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        g_fast_boot_enabled = (strcmp(var.value, "enabled") == 0);
     }
 
     var.key = "cubspielecom_timing";
@@ -249,12 +288,16 @@ RETRO_API void retro_set_environment(retro_environment_t cb) {
 
         static const struct retro_variable vars[] = {
             { "cubspielecom_palette", "LCD Color Palette; olive|grayscale|pocket|high_contrast" },
+            { "cubspielecom_contrast", "LCD Contrast Wheel; 100|115|85|70" },
             { "cubspielecom_ghosting", "STN LCD Ghosting; off|light|medium|heavy" },
+            { "cubspielecom_touch_cursor", "Touch Grid & Cursor Overlay; cell_highlight|full_grid|crosshair|disabled" },
+            { "cubspielecom_cursor_autohide", "Touch Cursor Auto-Hide; disabled|3s|5s" },
+            { "cubspielecom_touch_mode", "Stylus Click Mode; single_click|hold" },
+            { "cubspielecom_analog_stylus", "Right Stick Virtual Stylus (R2/R3 Tap); enabled|disabled" },
+            { "cubspielecom_fast_boot", "Fast Boot (Skip BIOS 3D Globe); disabled|enabled" },
             { "cubspielecom_speaker_filter", "28mm Internal Speaker Filter; enabled|disabled" },
             { "cubspielecom_vsync", "Tear-Free V-Sync Latch; enabled|disabled" },
-            { "cubspielecom_touch_cursor", "Touch Grid & Cursor Overlay; cell_highlight|full_grid|crosshair|disabled" },
-            { "cubspielecom_touch_mode", "Stylus Click Mode; single_click|hold" },
-            { "cubspielecom_timing", "Frame Pacing (Restart/Live); 60hz_realtime|native_74hz" },
+            { "cubspielecom_timing", "Frame Pacing; 60hz_realtime|native_74hz" },
             { NULL, NULL }
         };
         cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void *)vars);
@@ -325,10 +368,13 @@ RETRO_API void retro_reset(void) {
     gamecom_lcd_reset(&g_lcd);
     gamecom_audio_reset(&g_audio);
     g_prev_pointer_down = false;
+    g_prev_analog_click = false;
     g_click_pulse_frames = 0;
     g_click_release_frames = 0;
     g_tap_head = 0;
     g_tap_tail = 0;
+    g_cursor_idle_frames = 0;
+    g_fast_boot_frames_left = g_fast_boot_enabled ? 240 : 0;
 }
 
 RETRO_API bool retro_load_game(const struct retro_game_info *game) {
@@ -350,6 +396,10 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game) {
         { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT, "Menu" },
         { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START,  "Pause" },
         { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L,      "Sound" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2,     "Stylus Tap" },
+        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3,     "Stylus Tap (Stick Click)" },
+        { 0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X, "Virtual Stylus X" },
+        { 0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y, "Virtual Stylus Y" },
         { 0, 0, 0, 0, NULL }
     };
     if (environ_cb) {
@@ -437,27 +487,64 @@ RETRO_API void retro_run(void) {
         if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START))  buttons |= GAMECOM_BTN_PAUSE;
         if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L))      buttons |= GAMECOM_BTN_SOUND;
 
-        /* Touchscreen / Mouse pointer (-0x7FFF..+0x7FFF -> 0..199, 0..159) */
+        /* Touchscreen / Mouse pointer (-0x7FFF..+0x7FFF -> 0..199, 0..159)
+         * Guard against out-of-viewport / mobile lift (-0x8000) phantom edge taps. */
         int16_t px = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
         int16_t py = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
         int16_t pressed = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
-        bool raw_down = (pressed != 0);
+        bool in_viewport = (px > -0x8000 && py > -0x8000);
+        bool raw_pointer_down = (pressed != 0) && in_viewport;
+        bool pointer_moved = in_viewport && (px != g_prev_raw_px || py != g_prev_raw_py);
 
-        if (px != 0 || py != 0 || raw_down) {
+        if (in_viewport && (pointer_moved || raw_pointer_down)) {
             g_pointer_active = true;
+            g_cursor_idle_frames = 0;
+            g_prev_raw_px = px;
+            g_prev_raw_py = py;
             int32_t sx = ((int32_t)px + 0x7FFF) * SM8521_SCREEN_WIDTH / 0xFFFF;
             int32_t sy = ((int32_t)py + 0x7FFF) * SM8521_SCREEN_HEIGHT / 0xFFFF;
             if (sx < 0) sx = 0; else if (sx >= SM8521_SCREEN_WIDTH) sx = SM8521_SCREEN_WIDTH - 1;
             if (sy < 0) sy = 0; else if (sy >= SM8521_SCREEN_HEIGHT) sy = SM8521_SCREEN_HEIGHT - 1;
             g_last_cursor_x = (int16_t)sx;
             g_last_cursor_y = (int16_t)sy;
+            g_analog_cursor_x = (float)sx;
+            g_analog_cursor_y = (float)sy;
         }
+
+        /* Right Analog Stick virtual stylus + R2/R3 tap for controller-only & handheld users */
+        bool analog_click = false;
+        if (g_analog_stylus_enabled) {
+            int16_t ax = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X);
+            int16_t ay = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y);
+            const int16_t deadzone = 4500;
+            if (ax > deadzone || ax < -deadzone || ay > deadzone || ay < -deadzone) {
+                g_pointer_active = true;
+                g_cursor_idle_frames = 0;
+                g_analog_cursor_x += ((float)ax / 32767.0f) * 3.0f;
+                g_analog_cursor_y += ((float)ay / 32767.0f) * 3.0f;
+                if (g_analog_cursor_x < 0.0f) g_analog_cursor_x = 0.0f;
+                if (g_analog_cursor_x >= (float)SM8521_SCREEN_WIDTH) g_analog_cursor_x = (float)(SM8521_SCREEN_WIDTH - 1);
+                if (g_analog_cursor_y < 0.0f) g_analog_cursor_y = 0.0f;
+                if (g_analog_cursor_y >= (float)SM8521_SCREEN_HEIGHT) g_analog_cursor_y = (float)(SM8521_SCREEN_HEIGHT - 1);
+                g_last_cursor_x = (int16_t)g_analog_cursor_x;
+                g_last_cursor_y = (int16_t)g_analog_cursor_y;
+            }
+            if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2) ||
+                input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R3)) {
+                analog_click = true;
+                g_pointer_active = true;
+                g_cursor_idle_frames = 0;
+            }
+        }
+
         stylus_x = g_last_cursor_x;
         stylus_y = g_last_cursor_y;
+        bool raw_down = raw_pointer_down || analog_click;
+        bool rising_edge = (raw_pointer_down && !g_prev_pointer_down) || (analog_click && !g_prev_analog_click);
 
         if (g_touch_single_click) {
-            if (raw_down && !g_prev_pointer_down) {
-                /* Rising edge: enqueue tap so rapid clicks are never dropped */
+            if (rising_edge) {
+                /* Enqueue tap so rapid clicks are never dropped */
                 int next_tail = (g_tap_tail + 1) % TAP_QUEUE_CAP;
                 if (next_tail != g_tap_head) {
                     g_tap_queue[g_tap_tail].x = g_last_cursor_x;
@@ -472,14 +559,12 @@ RETRO_API void retro_run(void) {
                 stylus_y = g_locked_click_y;
                 g_click_pulse_frames--;
                 if (g_click_pulse_frames == 0) {
-                    /* Guarantee a clean release gap so hardware sees the next tap edge */
                     g_click_release_frames = TAP_RELEASE_FRAMES;
                 }
             } else if (g_click_release_frames > 0) {
                 stylus_pressed = false;
                 g_click_release_frames--;
             } else if (g_tap_head != g_tap_tail) {
-                /* Start next queued tap */
                 g_locked_click_x = g_tap_queue[g_tap_head].x;
                 g_locked_click_y = g_tap_queue[g_tap_head].y;
                 g_tap_head = (g_tap_head + 1) % TAP_QUEUE_CAP;
@@ -497,21 +582,40 @@ RETRO_API void retro_run(void) {
             g_tap_head = 0;
             g_tap_tail = 0;
         }
-        g_prev_pointer_down = raw_down;
+        g_prev_pointer_down = raw_pointer_down;
+        g_prev_analog_click = analog_click;
+    }
+
+    if (g_pointer_active) {
+        g_cursor_idle_frames++;
     }
 
     sm8521_set_input(&g_cpu, buttons, stylus_pressed, stylus_x, stylus_y);
 
     g_audio.out_frames = 0;
-    if (g_native_74hz_timing) {
+    if (g_fast_boot_frames_left > 0) {
+        /* Fast-forward BIOS 3D Globe intro silently when Fast Boot is enabled */
+        int burst = (g_fast_boot_frames_left > 16) ? 16 : g_fast_boot_frames_left;
+        for (int i = 0; i < burst; i++) {
+            g_audio.out_frames = 0;
+            sm8521_run_cycles(&g_cpu, SM8521_CPU_CLOCK_HZ / 60u);
+            g_fast_boot_frames_left--;
+            if (g_cpu.cartridge_executed_this_frame) {
+                g_fast_boot_frames_left = 0;
+                break;
+            }
+        }
+    } else if (g_native_74hz_timing) {
         sm8521_run_frame(&g_cpu);
     } else {
         /* Exact 1/60s of 4.9152 MHz SM8521 hardware time = 81,920 cycles (exact 735 PCM samples) */
         sm8521_run_cycles(&g_cpu, SM8521_CPU_CLOCK_HZ / 60u);
     }
 
+    bool show_cursor = g_pointer_active &&
+                       (g_cursor_autohide_frames == 0 || g_cursor_idle_frames < g_cursor_autohide_frames);
     gamecom_lcd_render(&g_lcd, g_cpu.display_buffer,
-                       g_touch_overlay, g_pointer_active, g_last_cursor_x, g_last_cursor_y);
+                       g_touch_overlay, show_cursor, g_last_cursor_x, g_last_cursor_y);
 
     if (video_cb) {
         video_cb(g_lcd.fb_xrgb8888, SM8521_SCREEN_WIDTH, SM8521_SCREEN_HEIGHT,
@@ -541,6 +645,11 @@ RETRO_API bool retro_unserialize(const void *data, size_t size) {
     if (!sm8521_unserialize(&g_cpu, data, size)) return false;
     gamecom_audio_reset(&g_audio);
     g_audio.last_tone_cycle = g_cpu.cycles;
+    g_click_pulse_frames = 0;
+    g_click_release_frames = 0;
+    g_tap_head = 0;
+    g_tap_tail = 0;
+    g_fast_boot_frames_left = 0;
     return true;
 }
 

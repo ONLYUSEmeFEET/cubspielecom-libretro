@@ -18,6 +18,7 @@ typedef enum {
 
 typedef struct {
     GameComPaletteId palette;
+    float contrast; /* 0.70 .. 1.25 (1.0 = calibrated default) */
     float ghosting; /* 0.0 (off) .. 0.75 (heavy STN persistence) */
     float shade_buf[SM8521_SCREEN_WIDTH * SM8521_SCREEN_HEIGHT];
     uint32_t fb_xrgb8888[SM8521_SCREEN_WIDTH * SM8521_SCREEN_HEIGHT];
