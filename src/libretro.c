@@ -17,6 +17,15 @@ static retro_input_poll_t        input_poll_cb  = NULL;
 static retro_input_state_t       input_state_cb = NULL;
 static retro_log_printf_t        log_cb         = NULL;
 
+#define TAP_QUEUE_CAP 16
+#define TAP_PRESS_FRAMES   3
+#define TAP_RELEASE_FRAMES 2
+
+typedef struct {
+    int16_t x;
+    int16_t y;
+} TouchTap;
+
 static SM8521       g_cpu;
 static GameComLCD   g_lcd;
 static GameComAudio g_audio;
@@ -26,11 +35,15 @@ static bool         g_touch_single_click = true;
 static bool         g_native_74hz_timing = false;
 static bool         g_prev_pointer_down = false;
 static int          g_click_pulse_frames = 0;
+static int          g_click_release_frames = 0;
 static bool         g_pointer_active = false;
 static int16_t      g_last_cursor_x = SM8521_SCREEN_WIDTH / 2;
 static int16_t      g_last_cursor_y = SM8521_SCREEN_HEIGHT / 2;
 static int16_t      g_locked_click_x = 0;
 static int16_t      g_locked_click_y = 0;
+static TouchTap     g_tap_queue[TAP_QUEUE_CAP];
+static int          g_tap_head = 0;
+static int          g_tap_tail = 0;
 
 #define RETRO_SUBSYSTEM_DUAL_CART 1u
 
@@ -313,6 +326,9 @@ RETRO_API void retro_reset(void) {
     gamecom_audio_reset(&g_audio);
     g_prev_pointer_down = false;
     g_click_pulse_frames = 0;
+    g_click_release_frames = 0;
+    g_tap_head = 0;
+    g_tap_tail = 0;
 }
 
 RETRO_API bool retro_load_game(const struct retro_game_info *game) {
@@ -441,22 +457,45 @@ RETRO_API void retro_run(void) {
 
         if (g_touch_single_click) {
             if (raw_down && !g_prev_pointer_down) {
-                /* Rising edge: lock click cell and fire a single 4-frame tap pulse */
-                g_click_pulse_frames = 4;
-                g_locked_click_x = g_last_cursor_x;
-                g_locked_click_y = g_last_cursor_y;
+                /* Rising edge: enqueue tap so rapid clicks are never dropped */
+                int next_tail = (g_tap_tail + 1) % TAP_QUEUE_CAP;
+                if (next_tail != g_tap_head) {
+                    g_tap_queue[g_tap_tail].x = g_last_cursor_x;
+                    g_tap_queue[g_tap_tail].y = g_last_cursor_y;
+                    g_tap_tail = next_tail;
+                }
             }
+
             if (g_click_pulse_frames > 0) {
                 stylus_pressed = true;
                 stylus_x = g_locked_click_x;
                 stylus_y = g_locked_click_y;
                 g_click_pulse_frames--;
+                if (g_click_pulse_frames == 0) {
+                    /* Guarantee a clean release gap so hardware sees the next tap edge */
+                    g_click_release_frames = TAP_RELEASE_FRAMES;
+                }
+            } else if (g_click_release_frames > 0) {
+                stylus_pressed = false;
+                g_click_release_frames--;
+            } else if (g_tap_head != g_tap_tail) {
+                /* Start next queued tap */
+                g_locked_click_x = g_tap_queue[g_tap_head].x;
+                g_locked_click_y = g_tap_queue[g_tap_head].y;
+                g_tap_head = (g_tap_head + 1) % TAP_QUEUE_CAP;
+                g_click_pulse_frames = TAP_PRESS_FRAMES - 1;
+                stylus_pressed = true;
+                stylus_x = g_locked_click_x;
+                stylus_y = g_locked_click_y;
             } else {
                 stylus_pressed = false;
             }
         } else {
             stylus_pressed = raw_down;
             g_click_pulse_frames = 0;
+            g_click_release_frames = 0;
+            g_tap_head = 0;
+            g_tap_tail = 0;
         }
         g_prev_pointer_down = raw_down;
     }
