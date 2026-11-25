@@ -2,6 +2,7 @@
 #include "sm8521.h"
 #include "lcd.h"
 #include "audio.h"
+#include "zip_bios.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,41 +75,78 @@ static bool load_bios_from_system_dir(void) {
         sys_dir = ".";
     }
 
-    char int_paths[2][1024];
-    char ext_paths[2][1024];
+    /* 1. Try loose BIOS files (internal.bin / external.bin or No-Intro .tgc names) */
+    char int_paths[4][1024];
+    char ext_paths[4][1024];
     snprintf(int_paths[0], sizeof(int_paths[0]), "%s/gamecom/internal.bin", sys_dir);
     snprintf(int_paths[1], sizeof(int_paths[1]), "%s/internal.bin", sys_dir);
+    snprintf(int_paths[2], sizeof(int_paths[2]), "%s/gamecom/[BIOS] Tiger Game.com (USA) (Internal).tgc", sys_dir);
+    snprintf(int_paths[3], sizeof(int_paths[3]), "%s/[BIOS] Tiger Game.com (USA) (Internal).tgc", sys_dir);
+
     snprintf(ext_paths[0], sizeof(ext_paths[0]), "%s/gamecom/external.bin", sys_dir);
     snprintf(ext_paths[1], sizeof(ext_paths[1]), "%s/external.bin", sys_dir);
+    snprintf(ext_paths[2], sizeof(ext_paths[2]), "%s/gamecom/[BIOS] Tiger Game.com (USA) (External).tgc", sys_dir);
+    snprintf(ext_paths[3], sizeof(ext_paths[3]), "%s/[BIOS] Tiger Game.com (USA) (External).tgc", sys_dir);
 
     uint8_t *int_buf = NULL, *ext_buf = NULL;
     size_t int_sz = 0, ext_sz = 0;
 
-    for (int i = 0; i < 2 && !int_buf; i++) {
+    for (int i = 0; i < 4 && !int_buf; i++) {
         load_file_into(int_paths[i], &int_buf, &int_sz);
     }
-    for (int i = 0; i < 2 && !ext_buf; i++) {
+    for (int i = 0; i < 4 && !ext_buf; i++) {
         load_file_into(ext_paths[i], &ext_buf, &ext_sz);
     }
 
-    if (!int_buf || !ext_buf) {
-        if (log_cb) {
-            log_cb(RETRO_LOG_ERROR,
-                   "[Cub Spiele.Com] Missing BIOS files! Place internal.bin (4KB) and external.bin (256KB) in %s/gamecom/ or %s/\n",
-                   sys_dir, sys_dir);
-        }
+    if (int_buf && ext_buf) {
+        sm8521_load_internal_bios(&g_cpu, int_buf, int_sz);
+        sm8521_load_external_bios(&g_cpu, ext_buf, ext_sz);
         free(int_buf);
         free(ext_buf);
-        g_bios_loaded = false;
-        return false;
+        g_bios_loaded = true;
+        return true;
     }
-
-    sm8521_load_internal_bios(&g_cpu, int_buf, int_sz);
-    sm8521_load_external_bios(&g_cpu, ext_buf, ext_sz);
     free(int_buf);
     free(ext_buf);
-    g_bios_loaded = true;
-    return true;
+
+    /* 2. Try standard RetroArch/MAME gamecom.zip archive */
+    char zip_paths[2][1024];
+    snprintf(zip_paths[0], sizeof(zip_paths[0]), "%s/gamecom.zip", sys_dir);
+    snprintf(zip_paths[1], sizeof(zip_paths[1]), "%s/gamecom/gamecom.zip", sys_dir);
+
+    uint8_t *z_int = (uint8_t *)malloc(0x1000u);
+    uint8_t *z_ext = (uint8_t *)malloc(0x40000u);
+    if (z_int && z_ext) {
+        for (int i = 0; i < 2; i++) {
+            if (zip_load_gamecom_bios(zip_paths[i], z_int, z_ext)) {
+                sm8521_load_internal_bios(&g_cpu, z_int, 0x1000u);
+                sm8521_load_external_bios(&g_cpu, z_ext, 0x40000u);
+                if (log_cb) {
+                    log_cb(RETRO_LOG_INFO, "[Cub Spiele.Com] Loaded Game.com BIOS from %s\n", zip_paths[i]);
+                }
+                free(z_int);
+                free(z_ext);
+                g_bios_loaded = true;
+                return true;
+            }
+        }
+    }
+    free(z_int);
+    free(z_ext);
+
+    if (log_cb) {
+        log_cb(RETRO_LOG_ERROR,
+               "[Cub Spiele.Com] Missing BIOS! Place gamecom.zip or internal.bin + external.bin in %s/gamecom/ or %s/\n",
+               sys_dir, sys_dir);
+    }
+    if (environ_cb) {
+        struct retro_message msg;
+        msg.msg = "Cub Spiele.Com: Missing BIOS (gamecom.zip or internal.bin + external.bin in system/)";
+        msg.frames = 300;
+        environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+    }
+    g_bios_loaded = false;
+    return false;
 }
 
 static void check_variables(void) {
@@ -272,8 +310,17 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game) {
     sm8521_unload_cartridge(&g_cpu, 1);
     sm8521_unload_cartridge(&g_cpu, 2);
 
-    if (game && game->data && game->size > 0) {
-        sm8521_load_cartridge(&g_cpu, (const uint8_t *)game->data, game->size, 1);
+    if (game) {
+        if (game->data && game->size > 0) {
+            sm8521_load_cartridge(&g_cpu, (const uint8_t *)game->data, game->size, 1);
+        } else if (game->path) {
+            uint8_t *cart_buf = NULL;
+            size_t cart_sz = 0;
+            if (load_file_into(game->path, &cart_buf, &cart_sz)) {
+                sm8521_load_cartridge(&g_cpu, cart_buf, cart_sz, 1);
+                free(cart_buf);
+            }
+        }
     }
 
     check_variables();

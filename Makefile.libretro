@@ -21,6 +21,7 @@ SOURCES_C := \
 	src/sm8521.c \
 	src/lcd.c \
 	src/audio.c \
+	src/zip_bios.c \
 	src/libretro.c
 
 OBJECTS := $(SOURCES_C:.c=.o)

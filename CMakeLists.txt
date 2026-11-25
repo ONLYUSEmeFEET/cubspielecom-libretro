@@ -8,6 +8,7 @@ add_library(cubspielecom_libretro SHARED
     src/sm8521.c
     src/lcd.c
     src/audio.c
+    src/zip_bios.c
     src/libretro.c
 )
 
