@@ -1118,117 +1118,166 @@ void sm8521_run_cycles(SM8521 *cpu, uint32_t target_cycles) {
     }
 }
 
-/* Deterministic savestate container (excludes BIOS/cart ROMs and callback pointers) */
-#define SM8521_STATE_MAGIC 0x43535031u /* "CSP1" */
+/*
+ * Cross-platform portable little-endian savestate serializer (zero struct-padding dependence,
+ * safe across 32-bit ARM and 64-bit x86_64/arm64, excludes ROMs and callback pointers).
+ */
+#define SM8521_STATE_MAGIC   0x43535032u /* "CSP2" */
+#define SM8521_STATE_HEADER  128u
+#define SM8521_STATE_SIZE    (SM8521_STATE_HEADER + 0x108u + 0x0400u + 0x4000u + 0x2000u + 0x2000u + (SM8521_SCREEN_WIDTH * SM8521_SCREEN_HEIGHT))
 
-typedef struct {
-    uint32_t magic;
-    uint16_t m_PC, m_SP, m_IFLAGS, m_oldpc, m_scanline;
-    uint8_t  m_PS0, m_PS1, m_SYS, m_IE0, m_IE1, m_IR0, m_IR1, m_CKC;
-    uint8_t  m_clock_changed, m_halted, m_CheckInterrupts;
-    uint8_t  latched_cart_slot, last_lcdc_page_bit, committed_vram_valid;
-    uint8_t  mmu[5];
-    uint64_t cycles;
-    uint64_t last_dac_cycle;
-    uint32_t dma_count;
-    uint32_t clock_timer_accum_cycles;
-    uint32_t last_frame_cycles;
-    uint32_t last_hw_base_frame_cycles;
-    GameComTimer     m_timer[2];
-    GameComAudioRegs m_sound;
-    uint8_t  m_register_ram[0x108];
-    uint8_t  m_p_ram[0x0400];
-    uint8_t  videoram[0x4000];
-    uint8_t  nvram[0x2000];
-    uint8_t  committed_vram_page[0x2000];
-    uint8_t  display_buffer[SM8521_SCREEN_WIDTH * SM8521_SCREEN_HEIGHT];
-} SM8521StateBlob;
+static inline void wr_u16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+}
+static inline void wr_u32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v & 0xFFu);
+    p[1] = (uint8_t)((v >> 8) & 0xFFu);
+    p[2] = (uint8_t)((v >> 16) & 0xFFu);
+    p[3] = (uint8_t)((v >> 24) & 0xFFu);
+}
+static inline void wr_u64(uint8_t *p, uint64_t v) {
+    wr_u32(p, (uint32_t)(v & 0xFFFFFFFFu));
+    wr_u32(p + 4, (uint32_t)((v >> 32) & 0xFFFFFFFFu));
+}
+static inline uint16_t rd_u16(const uint8_t *p) {
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+static inline uint32_t rd_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+static inline uint64_t rd_u64(const uint8_t *p) {
+    return (uint64_t)rd_u32(p) | ((uint64_t)rd_u32(p + 4) << 32);
+}
 
 size_t sm8521_serialize_size(void) {
-    return sizeof(SM8521StateBlob);
+    return SM8521_STATE_SIZE;
 }
 
 bool sm8521_serialize(const SM8521 *cpu, void *dst, size_t size) {
-    if (!dst || size < sizeof(SM8521StateBlob)) return false;
-    SM8521StateBlob b;
-    memset(&b, 0, sizeof(b));
-    b.magic = SM8521_STATE_MAGIC;
-    b.m_PC = cpu->m_PC;
-    b.m_SP = cpu->m_SP;
-    b.m_IFLAGS = cpu->m_IFLAGS;
-    b.m_oldpc = cpu->m_oldpc;
-    b.m_scanline = cpu->m_scanline;
-    b.m_PS0 = cpu->m_PS0;
-    b.m_PS1 = cpu->m_PS1;
-    b.m_SYS = cpu->m_SYS;
-    b.m_IE0 = cpu->m_IE0;
-    b.m_IE1 = cpu->m_IE1;
-    b.m_IR0 = cpu->m_IR0;
-    b.m_IR1 = cpu->m_IR1;
-    b.m_CKC = cpu->m_CKC;
-    b.m_clock_changed = cpu->m_clock_changed;
-    b.m_halted = cpu->m_halted;
-    b.m_CheckInterrupts = cpu->m_CheckInterrupts;
-    b.latched_cart_slot = cpu->latched_cart_slot;
-    b.last_lcdc_page_bit = cpu->last_lcdc_page_bit;
-    b.committed_vram_valid = cpu->committed_vram_valid ? 1u : 0u;
-    memcpy(b.mmu, cpu->mmu, sizeof(b.mmu));
-    b.cycles = cpu->cycles;
-    b.last_dac_cycle = cpu->last_dac_cycle;
-    b.dma_count = cpu->dma_count;
-    b.clock_timer_accum_cycles = cpu->clock_timer_accum_cycles;
-    b.last_frame_cycles = cpu->last_frame_cycles;
-    b.last_hw_base_frame_cycles = cpu->last_hw_base_frame_cycles;
-    memcpy(b.m_timer, cpu->m_timer, sizeof(b.m_timer));
-    b.m_sound = cpu->m_sound;
-    memcpy(b.m_register_ram, cpu->m_register_ram, sizeof(b.m_register_ram));
-    memcpy(b.m_p_ram, cpu->m_p_ram, sizeof(b.m_p_ram));
-    memcpy(b.videoram, cpu->videoram, sizeof(b.videoram));
-    memcpy(b.nvram, cpu->nvram, sizeof(b.nvram));
-    memcpy(b.committed_vram_page, cpu->committed_vram_page, sizeof(b.committed_vram_page));
-    memcpy(b.display_buffer, cpu->display_buffer, sizeof(b.display_buffer));
-    memcpy(dst, &b, sizeof(b));
+    if (!cpu || !dst || size < SM8521_STATE_SIZE) return false;
+    uint8_t *out = (uint8_t *)dst;
+    memset(out, 0, SM8521_STATE_HEADER);
+
+    wr_u32(out + 0,  SM8521_STATE_MAGIC);
+    wr_u16(out + 4,  cpu->m_PC);
+    wr_u16(out + 6,  cpu->m_SP);
+    wr_u16(out + 8,  cpu->m_IFLAGS);
+    wr_u16(out + 10, cpu->m_oldpc);
+    wr_u16(out + 12, cpu->m_scanline);
+    out[14] = cpu->m_PS0;
+    out[15] = cpu->m_PS1;
+    out[16] = cpu->m_SYS;
+    out[17] = cpu->m_IE0;
+    out[18] = cpu->m_IE1;
+    out[19] = cpu->m_IR0;
+    out[20] = cpu->m_IR1;
+    out[21] = cpu->m_CKC;
+    out[22] = cpu->m_clock_changed;
+    out[23] = cpu->m_halted;
+    out[24] = cpu->m_CheckInterrupts;
+    out[25] = cpu->latched_cart_slot;
+    out[26] = cpu->last_lcdc_page_bit;
+    out[27] = cpu->committed_vram_valid ? 1u : 0u;
+    memcpy(out + 28, cpu->mmu, 5);
+    wr_u64(out + 36, cpu->cycles);
+    wr_u64(out + 44, cpu->last_dac_cycle);
+    wr_u32(out + 52, cpu->dma_count);
+    wr_u32(out + 56, cpu->clock_timer_accum_cycles);
+    wr_u32(out + 60, cpu->last_frame_cycles);
+    wr_u32(out + 64, cpu->last_hw_base_frame_cycles);
+    wr_u32(out + 68, cpu->scanline_cycle_accum);
+
+    /* Timers (2 * 11 bytes at offset 72..93) */
+    for (int t = 0; t < 2; t++) {
+        uint8_t *tp = out + 72 + t * 11;
+        tp[0] = cpu->m_timer[t].enabled ? 1u : 0u;
+        wr_u16(tp + 1, cpu->m_timer[t].upcounter_max);
+        wr_u32(tp + 3, cpu->m_timer[t].prescale_max);
+        wr_u32(tp + 7, cpu->m_timer[t].prescale_count);
+    }
+
+    /* Sound regs (11 bytes at 94..104; waveforms are in m_p_ram $60-$7F) */
+    out[94] = cpu->m_sound.sgc;
+    out[95] = cpu->m_sound.sg0l;
+    out[96] = cpu->m_sound.sg1l;
+    out[97] = cpu->m_sound.sg2l;
+    out[98] = cpu->m_sound.sgda;
+    wr_u16(out + 99,  cpu->m_sound.sg0t);
+    wr_u16(out + 101, cpu->m_sound.sg1t);
+    wr_u16(out + 103, cpu->m_sound.sg2t);
+
+    uint8_t *p = out + SM8521_STATE_HEADER;
+    memcpy(p, cpu->m_register_ram, 0x108u); p += 0x108u;
+    memcpy(p, cpu->m_p_ram,        0x0400u); p += 0x0400u;
+    memcpy(p, cpu->videoram,       0x4000u); p += 0x4000u;
+    memcpy(p, cpu->nvram,          0x2000u); p += 0x2000u;
+    memcpy(p, cpu->committed_vram_page, 0x2000u); p += 0x2000u;
+    memcpy(p, cpu->display_buffer, SM8521_SCREEN_WIDTH * SM8521_SCREEN_HEIGHT);
     return true;
 }
 
 bool sm8521_unserialize(SM8521 *cpu, const void *src, size_t size) {
-    if (!src || size < sizeof(SM8521StateBlob)) return false;
-    SM8521StateBlob b;
-    memcpy(&b, src, sizeof(b));
-    if (b.magic != SM8521_STATE_MAGIC) return false;
-    cpu->m_PC = b.m_PC;
-    cpu->m_SP = b.m_SP;
-    cpu->m_IFLAGS = b.m_IFLAGS;
-    cpu->m_oldpc = b.m_oldpc;
-    cpu->m_scanline = b.m_scanline % SM8521_SCREEN_WIDTH;
-    cpu->m_PS0 = b.m_PS0;
-    cpu->m_PS1 = b.m_PS1;
-    cpu->m_SYS = b.m_SYS;
-    cpu->m_IE0 = b.m_IE0;
-    cpu->m_IE1 = b.m_IE1;
-    cpu->m_IR0 = b.m_IR0;
-    cpu->m_IR1 = b.m_IR1;
-    cpu->m_CKC = b.m_CKC;
-    cpu->m_clock_changed = b.m_clock_changed;
-    cpu->m_halted = b.m_halted;
-    cpu->m_CheckInterrupts = b.m_CheckInterrupts;
-    cpu->latched_cart_slot = b.latched_cart_slot;
-    cpu->last_lcdc_page_bit = b.last_lcdc_page_bit;
-    cpu->committed_vram_valid = b.committed_vram_valid != 0;
-    memcpy(cpu->mmu, b.mmu, sizeof(b.mmu));
-    cpu->cycles = b.cycles;
-    cpu->last_dac_cycle = b.last_dac_cycle;
-    cpu->dma_count = b.dma_count;
-    cpu->clock_timer_accum_cycles = b.clock_timer_accum_cycles;
-    cpu->last_frame_cycles = b.last_frame_cycles;
-    cpu->last_hw_base_frame_cycles = b.last_hw_base_frame_cycles;
-    memcpy(cpu->m_timer, b.m_timer, sizeof(b.m_timer));
-    cpu->m_sound = b.m_sound;
-    memcpy(cpu->m_register_ram, b.m_register_ram, sizeof(b.m_register_ram));
-    memcpy(cpu->m_p_ram, b.m_p_ram, sizeof(b.m_p_ram));
-    memcpy(cpu->videoram, b.videoram, sizeof(b.videoram));
-    memcpy(cpu->nvram, b.nvram, sizeof(b.nvram));
-    memcpy(cpu->committed_vram_page, b.committed_vram_page, sizeof(b.committed_vram_page));
-    memcpy(cpu->display_buffer, b.display_buffer, sizeof(b.display_buffer));
+    if (!cpu || !src || size < SM8521_STATE_SIZE) return false;
+    const uint8_t *in = (const uint8_t *)src;
+    if (rd_u32(in + 0) != SM8521_STATE_MAGIC) return false;
+
+    cpu->m_PC = rd_u16(in + 4);
+    cpu->m_SP = rd_u16(in + 6);
+    cpu->m_IFLAGS = rd_u16(in + 8);
+    cpu->m_oldpc = rd_u16(in + 10);
+    cpu->m_scanline = rd_u16(in + 12);
+    if (cpu->m_scanline >= SM8521_SCREEN_WIDTH + 16u) cpu->m_scanline = 0;
+    cpu->m_PS0 = in[14];
+    cpu->m_PS1 = in[15];
+    cpu->m_SYS = in[16];
+    cpu->m_IE0 = in[17];
+    cpu->m_IE1 = in[18];
+    cpu->m_IR0 = in[19];
+    cpu->m_IR1 = in[20];
+    cpu->m_CKC = in[21];
+    cpu->m_clock_changed = in[22];
+    cpu->m_halted = in[23];
+    cpu->m_CheckInterrupts = in[24];
+    cpu->latched_cart_slot = in[25];
+    cpu->last_lcdc_page_bit = in[26];
+    cpu->committed_vram_valid = in[27] != 0;
+    memcpy(cpu->mmu, in + 28, 5);
+    cpu->cycles = rd_u64(in + 36);
+    cpu->last_dac_cycle = rd_u64(in + 44);
+    cpu->dma_count = rd_u32(in + 52);
+    cpu->clock_timer_accum_cycles = rd_u32(in + 56);
+    cpu->last_frame_cycles = rd_u32(in + 60);
+    cpu->last_hw_base_frame_cycles = rd_u32(in + 64);
+    cpu->scanline_cycle_accum = rd_u32(in + 68);
+
+    for (int t = 0; t < 2; t++) {
+        const uint8_t *tp = in + 72 + t * 11;
+        cpu->m_timer[t].enabled = tp[0] != 0;
+        cpu->m_timer[t].upcounter_max = rd_u16(tp + 1);
+        cpu->m_timer[t].prescale_max = rd_u32(tp + 3);
+        if (cpu->m_timer[t].prescale_max == 0) cpu->m_timer[t].prescale_max = 1;
+        cpu->m_timer[t].prescale_count = rd_u32(tp + 7);
+    }
+
+    cpu->m_sound.sgc  = in[94];
+    cpu->m_sound.sg0l = in[95];
+    cpu->m_sound.sg1l = in[96];
+    cpu->m_sound.sg2l = in[97];
+    cpu->m_sound.sgda = in[98];
+    cpu->m_sound.sg0t = rd_u16(in + 99);
+    cpu->m_sound.sg1t = rd_u16(in + 101);
+    cpu->m_sound.sg2t = rd_u16(in + 103);
+
+    const uint8_t *p = in + SM8521_STATE_HEADER;
+    memcpy(cpu->m_register_ram, p, 0x108u); p += 0x108u;
+    memcpy(cpu->m_p_ram,        p, 0x0400u); p += 0x0400u;
+    memcpy(cpu->videoram,       p, 0x4000u); p += 0x4000u;
+    memcpy(cpu->nvram,          p, 0x2000u); p += 0x2000u;
+    memcpy(cpu->committed_vram_page, p, 0x2000u); p += 0x2000u;
+    memcpy(cpu->display_buffer, p, SM8521_SCREEN_WIDTH * SM8521_SCREEN_HEIGHT);
+
+    memcpy(cpu->m_sound.sg0w, &cpu->m_p_ram[SM8521_SG0W0], 16u);
+    memcpy(cpu->m_sound.sg1w, &cpu->m_p_ram[SM8521_SG1W0], 16u);
     return true;
 }

@@ -9,15 +9,21 @@
 #include <string.h>
 #include <stdarg.h>
 
-static retro_environment_t       environ_cb     = NULL;
-static retro_video_refresh_t     video_cb       = NULL;
-static retro_audio_sample_t      audio_cb       = NULL;
-static retro_audio_sample_batch_t audio_batch_cb = NULL;
-static retro_input_poll_t        input_poll_cb  = NULL;
-static retro_input_state_t       input_state_cb = NULL;
-static retro_log_printf_t        log_cb         = NULL;
+#ifdef GIT_VERSION
+#define CORE_VERSION "0.1.0 (" GIT_VERSION ")"
+#else
+#define CORE_VERSION "0.1.0"
+#endif
 
-#define TAP_QUEUE_CAP 16
+static retro_environment_t        environ_cb     = NULL;
+static retro_video_refresh_t      video_cb       = NULL;
+static retro_audio_sample_t       audio_cb       = NULL;
+static retro_audio_sample_batch_t audio_batch_cb = NULL;
+static retro_input_poll_t         input_poll_cb  = NULL;
+static retro_input_state_t        input_state_cb = NULL;
+static retro_log_printf_t         log_cb         = NULL;
+
+#define TAP_QUEUE_CAP      16
 #define TAP_PRESS_FRAMES   3
 #define TAP_RELEASE_FRAMES 2
 
@@ -26,34 +32,34 @@ typedef struct {
     int16_t y;
 } TouchTap;
 
-static SM8521       g_cpu;
-static GameComLCD   g_lcd;
-static GameComAudio g_audio;
-static bool         g_bios_loaded = false;
+static SM8521       *g_cpu   = NULL;
+static GameComLCD    g_lcd;
+static GameComAudio  g_audio;
+static bool          g_bios_loaded = false;
 static GameComTouchOverlay g_touch_overlay = TOUCH_OVERLAY_CELL_HIGHLIGHT;
-static bool         g_touch_single_click = true;
-static bool         g_native_74hz_timing = false;
-static bool         g_analog_stylus_enabled = true;
-static bool         g_fast_boot_enabled = false;
-static int          g_cursor_autohide_frames = 0; /* 0 = never hide */
-static int          g_cursor_idle_frames = 0;
-static bool         g_prev_pointer_down = false;
-static bool         g_prev_analog_click = false;
-static int          g_click_pulse_frames = 0;
-static int          g_click_release_frames = 0;
-static bool         g_pointer_active = false;
-static int16_t      g_last_cursor_x = SM8521_SCREEN_WIDTH / 2;
-static int16_t      g_last_cursor_y = SM8521_SCREEN_HEIGHT / 2;
-static float        g_analog_cursor_x = (float)(SM8521_SCREEN_WIDTH / 2);
-static float        g_analog_cursor_y = (float)(SM8521_SCREEN_HEIGHT / 2);
-static int16_t      g_prev_raw_px = 0;
-static int16_t      g_prev_raw_py = 0;
-static int16_t      g_locked_click_x = 0;
-static int16_t      g_locked_click_y = 0;
-static TouchTap     g_tap_queue[TAP_QUEUE_CAP];
-static int          g_tap_head = 0;
-static int          g_tap_tail = 0;
-static int          g_fast_boot_frames_left = 0;
+static bool          g_touch_single_click = true;
+static bool          g_native_74hz_timing = false;
+static bool          g_analog_stylus_enabled = true;
+static bool          g_fast_boot_enabled = false;
+static int           g_cursor_autohide_frames = 0;
+static int           g_cursor_idle_frames = 0;
+static bool          g_prev_pointer_down = false;
+static bool          g_prev_analog_click = false;
+static int           g_click_pulse_frames = 0;
+static int           g_click_release_frames = 0;
+static bool          g_pointer_active = false;
+static int16_t       g_last_cursor_x = SM8521_SCREEN_WIDTH / 2;
+static int16_t       g_last_cursor_y = SM8521_SCREEN_HEIGHT / 2;
+static float         g_analog_cursor_x = (float)(SM8521_SCREEN_WIDTH / 2);
+static float         g_analog_cursor_y = (float)(SM8521_SCREEN_HEIGHT / 2);
+static int16_t       g_prev_raw_px = 0;
+static int16_t       g_prev_raw_py = 0;
+static int16_t       g_locked_click_x = 0;
+static int16_t       g_locked_click_y = 0;
+static TouchTap      g_tap_queue[TAP_QUEUE_CAP];
+static int           g_tap_head = 0;
+static int           g_tap_tail = 0;
+static int           g_fast_boot_frames_left = 0;
 
 #define RETRO_SUBSYSTEM_DUAL_CART 1u
 
@@ -65,6 +71,141 @@ static const struct retro_subsystem_rom_info g_dual_cart_roms[] = {
 static const struct retro_subsystem_info g_subsystems[] = {
     { "Dual Cartridge (Slot 1 + Slot 2)", "gamecom_dual_cart", g_dual_cart_roms, 2, RETRO_SUBSYSTEM_DUAL_CART },
     { NULL, NULL, NULL, 0, 0 }
+};
+
+static struct retro_core_option_v2_category g_option_cats[] = {
+    { "video",  "Display & LCD",   "Configure 200x160 2-bpp STN LCD palette, contrast, and ghosting." },
+    { "input",  "Touch & Stylus",  "Configure touchscreen overlay, click queuing, and right-stick virtual stylus." },
+    { "system", "System & Audio",  "Configure frame pacing, fast boot, and 28mm internal speaker DSP." },
+    { NULL, NULL, NULL }
+};
+
+static struct retro_core_option_v2_definition g_option_defs[] = {
+    {
+        "cubspielecom_palette", "LCD Color Palette", "Color Palette",
+        "Select the 4-shade STN LCD color preset.", NULL, "video",
+        {
+            { "olive",         "Calibrated Olive Green (#b9c48a)" },
+            { "grayscale",     "Classic Grayscale" },
+            { "pocket",        "Pocket Monochrome" },
+            { "high_contrast", "High Contrast" },
+            { NULL, NULL }
+        },
+        "olive"
+    },
+    {
+        "cubspielecom_contrast", "LCD Contrast Wheel", "Contrast Wheel",
+        "Adjust LCD contrast, modeling the physical Game.com side contrast wheel.", NULL, "video",
+        {
+            { "100", "100% (Calibrated)" },
+            { "115", "115% (Crisp)" },
+            { "85",  "85% (Soft)" },
+            { "70",  "70% (Faded)" },
+            { NULL, NULL }
+        },
+        "100"
+    },
+    {
+        "cubspielecom_ghosting", "STN LCD Ghosting", "LCD Ghosting",
+        "Simulate passive-matrix STN LCD frame persistence.", NULL, "video",
+        {
+            { "off",    "Off" },
+            { "light",  "Light (25%)" },
+            { "medium", "Medium (45%)" },
+            { "heavy",  "Heavy (65%)" },
+            { NULL, NULL }
+        },
+        "off"
+    },
+    {
+        "cubspielecom_touch_cursor", "Touch Grid & Cursor Overlay", "Touch Overlay",
+        "Highlight the active 16x16 hardware cell of the Game.com's 13x10 touch matrix.", NULL, "input",
+        {
+            { "cell_highlight", "Crosshair + Active 16x16 Cell" },
+            { "full_grid",      "Full 13x10 Grid + Cell + Crosshair" },
+            { "crosshair",      "Crosshair Only" },
+            { "disabled",       "Off" },
+            { NULL, NULL }
+        },
+        "cell_highlight"
+    },
+    {
+        "cubspielecom_cursor_autohide", "Touch Cursor Auto-Hide", "Cursor Auto-Hide",
+        "Optionally hide the touch cursor after a period of pointer inactivity.", NULL, "input",
+        {
+            { "disabled", "Disabled (Always Visible)" },
+            { "3s",       "After 3 Seconds" },
+            { "5s",       "After 5 Seconds" },
+            { NULL, NULL }
+        },
+        "disabled"
+    },
+    {
+        "cubspielecom_touch_mode", "Stylus Click Mode", "Click Mode",
+        "Single Click uses a FIFO tap queue with guaranteed release gaps so rapid clicks never drop.", NULL, "input",
+        {
+            { "single_click", "Single Click (Queued Tap)" },
+            { "hold",         "Hold / Continuous" },
+            { NULL, NULL }
+        },
+        "single_click"
+    },
+    {
+        "cubspielecom_analog_stylus", "Right Stick Virtual Stylus", "Right Stick Stylus",
+        "Allow moving the touch cursor with the Right Analog Stick and tapping with R2/R3.", NULL, "input",
+        {
+            { "enabled",  "Enabled (R2/R3 to Tap)" },
+            { "disabled", "Disabled" },
+            { NULL, NULL }
+        },
+        "enabled"
+    },
+    {
+        "cubspielecom_fast_boot", "Fast Boot (Skip 3D Globe)", "Fast Boot",
+        "Fast-forward through the Game.com BIOS 3D Globe animation on reset/load.", NULL, "system",
+        {
+            { "disabled", "Disabled (Authentic Boot)" },
+            { "enabled",  "Enabled" },
+            { NULL, NULL }
+        },
+        "disabled"
+    },
+    {
+        "cubspielecom_speaker_filter", "28mm Internal Speaker Filter", "Speaker Filter",
+        "Apply the 310 Hz - 3,450 Hz Game.com 28mm speaker band-pass and soft-clip filter.", NULL, "system",
+        {
+            { "enabled",  "Enabled (Authentic Speaker)" },
+            { "disabled", "Disabled (Raw PCM)" },
+            { NULL, NULL }
+        },
+        "enabled"
+    },
+    {
+        "cubspielecom_vsync", "Tear-Free V-Sync Latch", "V-Sync Latch",
+        "Latch all 200 LCD columns coherently at VBlank entry to prevent tearing.", NULL, "system",
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Raw Scanline)" },
+            { NULL, NULL }
+        },
+        "enabled"
+    },
+    {
+        "cubspielecom_timing", "Frame Pacing", "Frame Pacing",
+        "60 Hz Real-Time runs exact 4.9152 MHz timing (81,920 cycles/frame) for smooth pacing on all monitors.", NULL, "system",
+        {
+            { "60hz_realtime", "60 Hz Real-Time (Recommended)" },
+            { "native_74hz",   "Native 74.20 Hz (VRR / G-Sync)" },
+            { NULL, NULL }
+        },
+        "60hz_realtime"
+    },
+    { NULL, NULL, NULL, NULL, NULL, NULL, {{ NULL, NULL }}, NULL }
+};
+
+static struct retro_core_options_v2 g_options_v2 = {
+    g_option_cats,
+    g_option_defs
 };
 
 static void fallback_log(enum retro_log_level level, const char *fmt, ...) {
@@ -102,12 +243,12 @@ static bool load_file_into(const char *path, uint8_t **out_buf, size_t *out_size
 }
 
 static bool load_bios_from_system_dir(void) {
+    if (!g_cpu) return false;
     const char *sys_dir = NULL;
     if (!environ_cb || !environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &sys_dir) || !sys_dir) {
         sys_dir = ".";
     }
 
-    /* 1. Try loose BIOS files (internal.bin / external.bin or No-Intro .tgc names) */
     char int_paths[4][1024];
     char ext_paths[4][1024];
     snprintf(int_paths[0], sizeof(int_paths[0]), "%s/gamecom/internal.bin", sys_dir);
@@ -123,16 +264,12 @@ static bool load_bios_from_system_dir(void) {
     uint8_t *int_buf = NULL, *ext_buf = NULL;
     size_t int_sz = 0, ext_sz = 0;
 
-    for (int i = 0; i < 4 && !int_buf; i++) {
-        load_file_into(int_paths[i], &int_buf, &int_sz);
-    }
-    for (int i = 0; i < 4 && !ext_buf; i++) {
-        load_file_into(ext_paths[i], &ext_buf, &ext_sz);
-    }
+    for (int i = 0; i < 4 && !int_buf; i++) load_file_into(int_paths[i], &int_buf, &int_sz);
+    for (int i = 0; i < 4 && !ext_buf; i++) load_file_into(ext_paths[i], &ext_buf, &ext_sz);
 
     if (int_buf && ext_buf) {
-        sm8521_load_internal_bios(&g_cpu, int_buf, int_sz);
-        sm8521_load_external_bios(&g_cpu, ext_buf, ext_sz);
+        sm8521_load_internal_bios(g_cpu, int_buf, int_sz);
+        sm8521_load_external_bios(g_cpu, ext_buf, ext_sz);
         free(int_buf);
         free(ext_buf);
         g_bios_loaded = true;
@@ -141,7 +278,6 @@ static bool load_bios_from_system_dir(void) {
     free(int_buf);
     free(ext_buf);
 
-    /* 2. Try standard RetroArch/MAME gamecom.zip archive */
     char zip_paths[2][1024];
     snprintf(zip_paths[0], sizeof(zip_paths[0]), "%s/gamecom.zip", sys_dir);
     snprintf(zip_paths[1], sizeof(zip_paths[1]), "%s/gamecom/gamecom.zip", sys_dir);
@@ -151,8 +287,8 @@ static bool load_bios_from_system_dir(void) {
     if (z_int && z_ext) {
         for (int i = 0; i < 2; i++) {
             if (zip_load_gamecom_bios(zip_paths[i], z_int, z_ext)) {
-                sm8521_load_internal_bios(&g_cpu, z_int, 0x1000u);
-                sm8521_load_external_bios(&g_cpu, z_ext, 0x40000u);
+                sm8521_load_internal_bios(g_cpu, z_int, 0x1000u);
+                sm8521_load_external_bios(g_cpu, z_ext, 0x40000u);
                 if (log_cb) {
                     log_cb(RETRO_LOG_INFO, "[Cub Spiele.Com] Loaded Game.com BIOS from %s\n", zip_paths[i]);
                 }
@@ -221,7 +357,7 @@ static void check_variables(void) {
     var.key = "cubspielecom_vsync";
     var.value = NULL;
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
-        g_cpu.vsync_enabled = (strcmp(var.value, "enabled") == 0);
+        if (g_cpu) g_cpu->vsync_enabled = (strcmp(var.value, "enabled") == 0);
     }
 
     var.key = "cubspielecom_touch_cursor";
@@ -286,21 +422,26 @@ RETRO_API void retro_set_environment(retro_environment_t cb) {
     if (cb) {
         cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_game);
 
-        static const struct retro_variable vars[] = {
-            { "cubspielecom_palette", "LCD Color Palette; olive|grayscale|pocket|high_contrast" },
-            { "cubspielecom_contrast", "LCD Contrast Wheel; 100|115|85|70" },
-            { "cubspielecom_ghosting", "STN LCD Ghosting; off|light|medium|heavy" },
-            { "cubspielecom_touch_cursor", "Touch Grid & Cursor Overlay; cell_highlight|full_grid|crosshair|disabled" },
-            { "cubspielecom_cursor_autohide", "Touch Cursor Auto-Hide; disabled|3s|5s" },
-            { "cubspielecom_touch_mode", "Stylus Click Mode; single_click|hold" },
-            { "cubspielecom_analog_stylus", "Right Stick Virtual Stylus (R2/R3 Tap); enabled|disabled" },
-            { "cubspielecom_fast_boot", "Fast Boot (Skip BIOS 3D Globe); disabled|enabled" },
-            { "cubspielecom_speaker_filter", "28mm Internal Speaker Filter; enabled|disabled" },
-            { "cubspielecom_vsync", "Tear-Free V-Sync Latch; enabled|disabled" },
-            { "cubspielecom_timing", "Frame Pacing; 60hz_realtime|native_74hz" },
-            { NULL, NULL }
-        };
-        cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void *)vars);
+        unsigned opt_ver = 0;
+        if (cb(RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION, &opt_ver) && opt_ver >= 2) {
+            cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, &g_options_v2);
+        } else {
+            static const struct retro_variable vars[] = {
+                { "cubspielecom_palette", "LCD Color Palette; olive|grayscale|pocket|high_contrast" },
+                { "cubspielecom_contrast", "LCD Contrast Wheel; 100|115|85|70" },
+                { "cubspielecom_ghosting", "STN LCD Ghosting; off|light|medium|heavy" },
+                { "cubspielecom_touch_cursor", "Touch Grid & Cursor Overlay; cell_highlight|full_grid|crosshair|disabled" },
+                { "cubspielecom_cursor_autohide", "Touch Cursor Auto-Hide; disabled|3s|5s" },
+                { "cubspielecom_touch_mode", "Stylus Click Mode; single_click|hold" },
+                { "cubspielecom_analog_stylus", "Right Stick Virtual Stylus (R2/R3 Tap); enabled|disabled" },
+                { "cubspielecom_fast_boot", "Fast Boot (Skip BIOS 3D Globe); disabled|enabled" },
+                { "cubspielecom_speaker_filter", "28mm Internal Speaker Filter; enabled|disabled" },
+                { "cubspielecom_vsync", "Tear-Free V-Sync Latch; enabled|disabled" },
+                { "cubspielecom_timing", "Frame Pacing; 60hz_realtime|native_74hz" },
+                { NULL, NULL }
+            };
+            cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void *)vars);
+        }
         cb(RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO, (void *)g_subsystems);
     }
 }
@@ -318,7 +459,7 @@ RETRO_API unsigned retro_api_version(void) {
 RETRO_API void retro_get_system_info(struct retro_system_info *info) {
     memset(info, 0, sizeof(*info));
     info->library_name     = "Cub Spiele.Com";
-    info->library_version  = "0.1.0";
+    info->library_version  = CORE_VERSION;
     info->valid_extensions = "tgc|bin|rom";
     info->need_fullpath    = false;
     info->block_extract    = false;
@@ -332,13 +473,11 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info *info) {
     info->geometry.max_height   = SM8521_SCREEN_HEIGHT;
     info->geometry.aspect_ratio = (float)SM8521_SCREEN_WIDTH / (float)SM8521_SCREEN_HEIGHT;
     if (g_native_74hz_timing) {
-        /* Native SM8521 LCH=$07 / LCV=$27 frame rate: 4,915,200 / (320 * 207) = 74.20289855 Hz */
         info->timing.fps = (double)SM8521_CPU_CLOCK_HZ / (320.0 * 207.0);
     } else {
-        /* 60 Hz real-time pacing: 81,920 SM8521 cycles/frame = 100.0% real-time on all displays */
         info->timing.fps = 60.0;
     }
-    info->timing.sample_rate    = (double)GAMECOM_AUDIO_SAMPLE_RATE;
+    info->timing.sample_rate = (double)GAMECOM_AUDIO_SAMPLE_RATE;
 }
 
 RETRO_API void retro_set_controller_port_device(unsigned port, unsigned device) {
@@ -347,24 +486,30 @@ RETRO_API void retro_set_controller_port_device(unsigned port, unsigned device) 
 }
 
 RETRO_API void retro_init(void) {
-    sm8521_init(&g_cpu);
+    if (!g_cpu) {
+        g_cpu = (SM8521 *)calloc(1, sizeof(SM8521));
+    }
+    if (g_cpu) {
+        sm8521_init(g_cpu);
+        g_cpu->vsync_enabled = true;
+        g_cpu->cb_userdata = &g_audio;
+        g_cpu->on_dac_sample = gamecom_audio_on_dac_sample;
+        g_cpu->on_sound_reg_write = gamecom_audio_on_reg_write;
+        g_cpu->on_audio_frame_end = gamecom_audio_end_frame;
+        g_cpu->on_bios_audio_clip = gamecom_audio_on_bios_clip;
+    }
     gamecom_lcd_init(&g_lcd);
     gamecom_audio_init(&g_audio);
-
-    g_cpu.vsync_enabled = true;
-    g_cpu.cb_userdata = &g_audio;
-    g_cpu.on_dac_sample = gamecom_audio_on_dac_sample;
-    g_cpu.on_sound_reg_write = gamecom_audio_on_reg_write;
-    g_cpu.on_audio_frame_end = gamecom_audio_end_frame;
-    g_cpu.on_bios_audio_clip = gamecom_audio_on_bios_clip;
 }
 
 RETRO_API void retro_deinit(void) {
+    free(g_cpu);
+    g_cpu = NULL;
     g_bios_loaded = false;
 }
 
 RETRO_API void retro_reset(void) {
-    sm8521_reset(&g_cpu);
+    if (g_cpu) sm8521_reset(g_cpu);
     gamecom_lcd_reset(&g_lcd);
     gamecom_audio_reset(&g_audio);
     g_prev_pointer_down = false;
@@ -378,6 +523,8 @@ RETRO_API void retro_reset(void) {
 }
 
 RETRO_API bool retro_load_game(const struct retro_game_info *game) {
+    if (!g_cpu) return false;
+
     enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_XRGB8888;
     if (environ_cb && !environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt)) {
         if (log_cb) log_cb(RETRO_LOG_ERROR, "[Cub Spiele.Com] XRGB8888 pixel format not supported.\n");
@@ -406,23 +553,36 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game) {
         environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void *)desc);
         bool achievements = true;
         environ_cb(RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS, &achievements);
+
+        struct retro_memory_descriptor descs[2];
+        memset(descs, 0, sizeof(descs));
+        descs[0].flags  = RETRO_MEMDESC_SYSTEM_RAM;
+        descs[0].ptr    = g_cpu->m_p_ram;
+        descs[0].start  = 0x0000;
+        descs[0].len    = sizeof(g_cpu->m_p_ram);
+        descs[1].flags  = RETRO_MEMDESC_SAVE_RAM;
+        descs[1].ptr    = g_cpu->nvram;
+        descs[1].start  = 0xE000;
+        descs[1].len    = sizeof(g_cpu->nvram);
+        struct retro_memory_map mmap = { descs, 2 };
+        environ_cb(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &mmap);
     }
 
     if (!load_bios_from_system_dir()) {
         return false;
     }
 
-    sm8521_unload_cartridge(&g_cpu, 1);
-    sm8521_unload_cartridge(&g_cpu, 2);
+    sm8521_unload_cartridge(g_cpu, 1);
+    sm8521_unload_cartridge(g_cpu, 2);
 
     if (game) {
         if (game->data && game->size > 0) {
-            sm8521_load_cartridge(&g_cpu, (const uint8_t *)game->data, game->size, 1);
+            sm8521_load_cartridge(g_cpu, (const uint8_t *)game->data, game->size, 1);
         } else if (game->path) {
             uint8_t *cart_buf = NULL;
             size_t cart_sz = 0;
             if (load_file_into(game->path, &cart_buf, &cart_sz)) {
-                sm8521_load_cartridge(&g_cpu, cart_buf, cart_sz, 1);
+                sm8521_load_cartridge(g_cpu, cart_buf, cart_sz, 1);
                 free(cart_buf);
             }
         }
@@ -438,8 +598,8 @@ RETRO_API bool retro_load_game_special(unsigned game_type, const struct retro_ga
         if (!retro_load_game(&info[0])) {
             return false;
         }
-        if (num_info >= 2 && info[1].data && info[1].size > 0) {
-            sm8521_load_cartridge(&g_cpu, (const uint8_t *)info[1].data, info[1].size, 2);
+        if (num_info >= 2 && info[1].data && info[1].size > 0 && g_cpu) {
+            sm8521_load_cartridge(g_cpu, (const uint8_t *)info[1].data, info[1].size, 2);
             if (log_cb) {
                 log_cb(RETRO_LOG_INFO, "[Cub Spiele.Com] Dual Cartridge: loaded Slot 2 (%lu bytes)\n",
                        (unsigned long)info[1].size);
@@ -455,11 +615,19 @@ RETRO_API bool retro_load_game_special(unsigned game_type, const struct retro_ga
 }
 
 RETRO_API void retro_unload_game(void) {
-    sm8521_unload_cartridge(&g_cpu, 1);
-    sm8521_unload_cartridge(&g_cpu, 2);
+    if (g_cpu) {
+        sm8521_unload_cartridge(g_cpu, 1);
+        sm8521_unload_cartridge(g_cpu, 2);
+    }
+    g_tap_head = 0;
+    g_tap_tail = 0;
+    g_click_pulse_frames = 0;
+    g_click_release_frames = 0;
 }
 
 RETRO_API void retro_run(void) {
+    if (!g_cpu) return;
+
     bool updated = false;
     if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated) {
         check_variables();
@@ -487,8 +655,6 @@ RETRO_API void retro_run(void) {
         if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START))  buttons |= GAMECOM_BTN_PAUSE;
         if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L))      buttons |= GAMECOM_BTN_SOUND;
 
-        /* Touchscreen / Mouse pointer (-0x7FFF..+0x7FFF -> 0..199, 0..159)
-         * Guard against out-of-viewport / mobile lift (-0x8000) phantom edge taps. */
         int16_t px = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
         int16_t py = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
         int16_t pressed = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
@@ -511,7 +677,6 @@ RETRO_API void retro_run(void) {
             g_analog_cursor_y = (float)sy;
         }
 
-        /* Right Analog Stick virtual stylus + R2/R3 tap for controller-only & handheld users */
         bool analog_click = false;
         if (g_analog_stylus_enabled) {
             int16_t ax = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X);
@@ -544,7 +709,6 @@ RETRO_API void retro_run(void) {
 
         if (g_touch_single_click) {
             if (rising_edge) {
-                /* Enqueue tap so rapid clicks are never dropped */
                 int next_tail = (g_tap_tail + 1) % TAP_QUEUE_CAP;
                 if (next_tail != g_tap_head) {
                     g_tap_queue[g_tap_tail].x = g_last_cursor_x;
@@ -590,31 +754,29 @@ RETRO_API void retro_run(void) {
         g_cursor_idle_frames++;
     }
 
-    sm8521_set_input(&g_cpu, buttons, stylus_pressed, stylus_x, stylus_y);
+    sm8521_set_input(g_cpu, buttons, stylus_pressed, stylus_x, stylus_y);
 
     g_audio.out_frames = 0;
     if (g_fast_boot_frames_left > 0) {
-        /* Fast-forward BIOS 3D Globe intro silently when Fast Boot is enabled */
         int burst = (g_fast_boot_frames_left > 16) ? 16 : g_fast_boot_frames_left;
         for (int i = 0; i < burst; i++) {
             g_audio.out_frames = 0;
-            sm8521_run_cycles(&g_cpu, SM8521_CPU_CLOCK_HZ / 60u);
+            sm8521_run_cycles(g_cpu, SM8521_CPU_CLOCK_HZ / 60u);
             g_fast_boot_frames_left--;
-            if (g_cpu.cartridge_executed_this_frame) {
+            if (g_cpu->cartridge_executed_this_frame) {
                 g_fast_boot_frames_left = 0;
                 break;
             }
         }
     } else if (g_native_74hz_timing) {
-        sm8521_run_frame(&g_cpu);
+        sm8521_run_frame(g_cpu);
     } else {
-        /* Exact 1/60s of 4.9152 MHz SM8521 hardware time = 81,920 cycles (exact 735 PCM samples) */
-        sm8521_run_cycles(&g_cpu, SM8521_CPU_CLOCK_HZ / 60u);
+        sm8521_run_cycles(g_cpu, SM8521_CPU_CLOCK_HZ / 60u);
     }
 
     bool show_cursor = g_pointer_active &&
                        (g_cursor_autohide_frames == 0 || g_cursor_idle_frames < g_cursor_autohide_frames);
-    gamecom_lcd_render(&g_lcd, g_cpu.display_buffer,
+    gamecom_lcd_render(&g_lcd, g_cpu->display_buffer,
                        g_touch_overlay, show_cursor, g_last_cursor_x, g_last_cursor_y);
 
     if (video_cb) {
@@ -638,13 +800,13 @@ RETRO_API size_t retro_serialize_size(void) {
 }
 
 RETRO_API bool retro_serialize(void *data, size_t size) {
-    return sm8521_serialize(&g_cpu, data, size);
+    return g_cpu ? sm8521_serialize(g_cpu, data, size) : false;
 }
 
 RETRO_API bool retro_unserialize(const void *data, size_t size) {
-    if (!sm8521_unserialize(&g_cpu, data, size)) return false;
+    if (!g_cpu || !sm8521_unserialize(g_cpu, data, size)) return false;
     gamecom_audio_reset(&g_audio);
-    g_audio.last_tone_cycle = g_cpu.cycles;
+    g_audio.last_tone_cycle = g_cpu->cycles;
     g_click_pulse_frames = 0;
     g_click_release_frames = 0;
     g_tap_head = 0;
@@ -663,19 +825,21 @@ RETRO_API unsigned retro_get_region(void) {
 }
 
 RETRO_API void *retro_get_memory_data(unsigned id) {
+    if (!g_cpu) return NULL;
     switch (id & RETRO_MEMORY_MASK) {
-        case RETRO_MEMORY_SAVE_RAM:   return g_cpu.nvram;
-        case RETRO_MEMORY_SYSTEM_RAM: return g_cpu.m_p_ram;
-        case RETRO_MEMORY_VIDEO_RAM:  return g_cpu.videoram;
+        case RETRO_MEMORY_SAVE_RAM:   return g_cpu->nvram;
+        case RETRO_MEMORY_SYSTEM_RAM: return g_cpu->m_p_ram;
+        case RETRO_MEMORY_VIDEO_RAM:  return g_cpu->videoram;
         default: return NULL;
     }
 }
 
 RETRO_API size_t retro_get_memory_size(unsigned id) {
+    if (!g_cpu) return 0;
     switch (id & RETRO_MEMORY_MASK) {
-        case RETRO_MEMORY_SAVE_RAM:   return sizeof(g_cpu.nvram);
-        case RETRO_MEMORY_SYSTEM_RAM: return sizeof(g_cpu.m_p_ram);
-        case RETRO_MEMORY_VIDEO_RAM:  return sizeof(g_cpu.videoram);
+        case RETRO_MEMORY_SAVE_RAM:   return sizeof(g_cpu->nvram);
+        case RETRO_MEMORY_SYSTEM_RAM: return sizeof(g_cpu->m_p_ram);
+        case RETRO_MEMORY_VIDEO_RAM:  return sizeof(g_cpu->videoram);
         default: return 0;
     }
 }

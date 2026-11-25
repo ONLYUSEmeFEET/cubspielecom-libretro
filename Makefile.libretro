@@ -1,4 +1,10 @@
 TARGET_NAME := cubspielecom
+STATIC_LINKING ?= 0
+
+GIT_VERSION := $(shell git rev-parse --short HEAD 2>/dev/null)
+ifneq ($(GIT_VERSION),)
+  CFLAGS += -DGIT_VERSION=\"$(GIT_VERSION)\"
+endif
 
 ifeq ($(platform),)
   platform = unix
@@ -16,6 +22,8 @@ endif
 ifeq ($(origin CC), default)
   CC := gcc
 endif
+
+AR ?= ar
 
 SOURCES_C := \
 	src/sm8521.c \
@@ -44,6 +52,12 @@ else ifeq ($(platform), osx)
   fpic := -fPIC
   SHARED := -dynamiclib
   LDFLAGS += -lm
+else ifeq ($(platform), ios-arm64)
+  TARGET := $(TARGET_NAME)_libretro_ios.dylib
+  fpic := -fPIC
+  SHARED := -dynamiclib
+  CC := clang -arch arm64 -isysroot $(shell xcrun --sdk iphoneos --show-sdk-path)
+  LDFLAGS += -lm
 else ifeq ($(platform), win)
   TARGET := $(TARGET_NAME)_libretro.dll
   SHARED := -shared -static-libgcc -Wl,--no-undefined
@@ -56,7 +70,29 @@ else ifeq ($(platform), android)
 else ifeq ($(platform), emscripten)
   TARGET := $(TARGET_NAME)_libretro_emscripten.bc
   fpic := -fPIC
-  SHARED := -r
+  STATIC_LINKING = 1
+else ifeq ($(platform), libnx)
+  TARGET := $(TARGET_NAME)_libretro_libnx.a
+  CC := $(DEVKITPRO)/devkitA64/bin/aarch64-none-elf-gcc
+  AR := $(DEVKITPRO)/devkitA64/bin/aarch64-none-elf-ar
+  CFLAGS += -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE
+  STATIC_LINKING = 1
+else ifeq ($(platform), vita)
+  TARGET := $(TARGET_NAME)_libretro_vita.a
+  CC := arm-vita-eabi-gcc
+  AR := arm-vita-eabi-ar
+  STATIC_LINKING = 1
+else ifeq ($(platform), ctr)
+  TARGET := $(TARGET_NAME)_libretro_ctr.a
+  CC := $(DEVKITARM)/bin/arm-none-eabi-gcc
+  AR := $(DEVKITARM)/bin/arm-none-eabi-ar
+  CFLAGS += -march=armv6k -mtune=mpcore -mfloat-abi=hard
+  STATIC_LINKING = 1
+endif
+
+ifeq ($(STATIC_LINKING), 1)
+  TARGET := $(TARGET_NAME)_libretro_$(platform).a
+  CFLAGS += -DSTATIC_LINKING
 endif
 
 CFLAGS += $(fpic)
@@ -64,7 +100,11 @@ CFLAGS += $(fpic)
 all: $(TARGET)
 
 $(TARGET): $(OBJECTS)
+ifeq ($(STATIC_LINKING), 1)
+	$(AR) rcs $@ $(OBJECTS)
+else
 	$(CC) $(fpic) $(SHARED) -o $@ $(OBJECTS) $(LDFLAGS)
+endif
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<

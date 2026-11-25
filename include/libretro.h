@@ -141,6 +141,22 @@ typedef unsigned char bool;
 #define RETRO_ENVIRONMENT_GET_USERNAME 38
 #define RETRO_ENVIRONMENT_GET_LANGUAGE 39
 #define RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS (42 | RETRO_ENVIRONMENT_EXPERIMENTAL)
+#define RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION 52
+#define RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2 67
+
+#define RETRO_MEMDESC_CONST      (1 << 0)
+#define RETRO_MEMDESC_BIGENDIAN  (1 << 1)
+#define RETRO_MEMDESC_SYSTEM_RAM (1 << 2)
+#define RETRO_MEMDESC_SAVE_RAM   (1 << 3)
+#define RETRO_MEMDESC_VIDEO_RAM  (1 << 4)
+#define RETRO_MEMDESC_ALIGN_2    (1 << 16)
+#define RETRO_MEMDESC_ALIGN_4    (2 << 16)
+#define RETRO_MEMDESC_ALIGN_8    (3 << 16)
+#define RETRO_MEMDESC_MINSIZE_2  (1 << 24)
+#define RETRO_MEMDESC_MINSIZE_4  (2 << 24)
+#define RETRO_MEMDESC_MINSIZE_8  (3 << 24)
+
+#define RETRO_NUM_CORE_OPTION_VALUES_MAX 128
 
 enum retro_log_level
 {
@@ -249,6 +265,55 @@ struct retro_subsystem_info
    const struct retro_subsystem_rom_info *roms;
    unsigned    num_roms;
    unsigned    id;
+};
+
+struct retro_memory_descriptor
+{
+   uint64_t    flags;
+   void       *ptr;
+   size_t      offset;
+   size_t      start;
+   size_t      select;
+   size_t      disconnect;
+   size_t      len;
+   const char *addrspace;
+};
+
+struct retro_memory_map
+{
+   const struct retro_memory_descriptor *descriptors;
+   unsigned num_descriptors;
+};
+
+struct retro_core_option_value
+{
+   const char *value;
+   const char *label;
+};
+
+struct retro_core_option_v2_category
+{
+   const char *key;
+   const char *desc;
+   const char *info;
+};
+
+struct retro_core_option_v2_definition
+{
+   const char *key;
+   const char *desc;
+   const char *desc_categorized;
+   const char *info;
+   const char *info_categorized;
+   const char *category_key;
+   struct retro_core_option_value values[RETRO_NUM_CORE_OPTION_VALUES_MAX];
+   const char *default_value;
+};
+
+struct retro_core_options_v2
+{
+   struct retro_core_option_v2_category   *categories;
+   struct retro_core_option_v2_definition *definitions;
 };
 
 typedef bool (RETRO_CALLCONV *retro_environment_t)(unsigned cmd, void *data);

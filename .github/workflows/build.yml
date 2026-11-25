@@ -1,4 +1,4 @@
-name: Build Libretro Cores
+name: Build & Test Libretro Cores
 
 on:
   push:
@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-windows-x64:
@@ -18,12 +22,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
-          install: mingw-w64-x86_64-gcc make zip
-      - name: Build cubspielecom_libretro.dll
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc make zip
+      - name: Build cubspielecom_libretro.dll & run unit tests
         run: |
           make -f Makefile.libretro platform=win
-          gcc -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter -Iinclude -Isrc tests/smoke_test.c src/sm8521.c src/lcd.c src/audio.c -o smoke_test.exe -lm
+          gcc -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter -Iinclude -Isrc tests/unit_tests.c src/sm8521.c src/lcd.c src/audio.c src/zip_bios.c src/libretro.c -o unit_tests.exe -lm
+          ./unit_tests.exe
           zip -j cubspielecom_libretro-win64.zip cubspielecom_libretro.dll cubspielecom_libretro.info
       - uses: actions/upload-artifact@v4
         with:
@@ -35,10 +40,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build cubspielecom_libretro.so
+      - name: Build shared + static core & run unit tests
         run: |
           make -f Makefile.libretro platform=unix
-          gcc -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter -Iinclude -Isrc tests/smoke_test.c src/sm8521.c src/lcd.c src/audio.c -o smoke_test -lm
+          gcc -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter -Iinclude -Isrc tests/unit_tests.c src/sm8521.c src/lcd.c src/audio.c src/zip_bios.c src/libretro.c -o unit_tests -lm
+          ./unit_tests
+          make -f Makefile.libretro platform=unix clean
+          make -f Makefile.libretro platform=unix STATIC_LINKING=1
+          test -f cubspielecom_libretro_unix.a
+          make -f Makefile.libretro platform=unix clean
+          make -f Makefile.libretro platform=unix
           zip -j cubspielecom_libretro-linux-x86_64.zip cubspielecom_libretro.so cubspielecom_libretro.info
       - uses: actions/upload-artifact@v4
         with:
@@ -50,8 +61,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build cubspielecom_libretro.dylib (arm64 + x86_64)
+      - name: Build cubspielecom_libretro.dylib (arm64 + x86_64) & run unit tests
         run: |
+          clang -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter -Iinclude -Isrc tests/unit_tests.c src/sm8521.c src/lcd.c src/audio.c src/zip_bios.c src/libretro.c -o unit_tests -lm
+          ./unit_tests
           make -f Makefile.libretro platform=osx CC="clang -arch arm64"
           mv cubspielecom_libretro.dylib cubspielecom_libretro_arm64.dylib
           make -f Makefile.libretro platform=osx clean
