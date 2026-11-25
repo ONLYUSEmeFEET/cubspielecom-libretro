@@ -8,4 +8,7 @@
   3. Writes to `PS0` (`$001B`) and `PS0_MIRROR` (`$001E`) stay synchronized.
   4. Never pad unused 8KB NVRAM (`$E000–$FFFF`) bytes with `0xFF` (preserves *Lights Out* `$0917` binary progress bytes).
   5. Pure hardware audio only (`SGDA` `$004E` DAC, `SG0`/`SG1`/`SG2`, and BIOS digitized clips).
-- **Verification**: Always compile `cubspielecom_libretro.dll` (or `.so`) and run `smoke_test` after any core change.
+- **Verification**: Always compile `cubspielecom_libretro.dll` (and `STATIC_LINKING=1`), run `tests/unit_tests.c` and `tests/smoke_test.c` after any core change.
+
+## Specialist Skills (`.agents/skills/`)
+- `libretro-core-dev` — C99 libretro build/test gate, portable savestate rules, BIOS ZIP matching, 60 Hz pacing, and touchscreen FIFO tap invariants.
