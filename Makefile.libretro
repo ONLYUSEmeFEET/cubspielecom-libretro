@@ -1,0 +1,69 @@
+TARGET_NAME := cubspielecom
+
+ifeq ($(platform),)
+  platform = unix
+  ifeq ($(shell uname -a),)
+    platform = win
+  else ifneq ($(findstring MINGW,$(shell uname -a)),)
+    platform = win
+  else ifneq ($(findstring Darwin,$(shell uname -a)),)
+    platform = osx
+  else ifneq ($(findstring win,$(shell uname -a)),)
+    platform = win
+  endif
+endif
+
+ifeq ($(origin CC), default)
+  CC := gcc
+endif
+
+SOURCES_C := \
+	src/sm8521.c \
+	src/lcd.c \
+	src/audio.c \
+	src/libretro.c
+
+OBJECTS := $(SOURCES_C:.c=.o)
+
+CFLAGS += -std=c99 -Wall -Wextra -Wno-unused-parameter -Iinclude -Isrc
+
+ifeq ($(DEBUG), 1)
+  CFLAGS += -O0 -g
+else
+  CFLAGS += -O3 -DNDEBUG
+endif
+
+ifeq ($(platform), unix)
+  TARGET := $(TARGET_NAME)_libretro.so
+  fpic := -fPIC
+  SHARED := -shared -Wl,--version-script=link.T -Wl,--no-undefined
+  LDFLAGS += -lm
+else ifeq ($(platform), osx)
+  TARGET := $(TARGET_NAME)_libretro.dylib
+  fpic := -fPIC
+  SHARED := -dynamiclib
+  LDFLAGS += -lm
+else ifeq ($(platform), win)
+  TARGET := $(TARGET_NAME)_libretro.dll
+  SHARED := -shared -static-libgcc -Wl,--no-undefined
+  LDFLAGS += -lm
+else ifeq ($(platform), emscripten)
+  TARGET := $(TARGET_NAME)_libretro_emscripten.bc
+  fpic := -fPIC
+  SHARED := -r
+endif
+
+CFLAGS += $(fpic)
+
+all: $(TARGET)
+
+$(TARGET): $(OBJECTS)
+	$(CC) $(fpic) $(SHARED) -o $@ $(OBJECTS) $(LDFLAGS)
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+clean:
+	rm -f $(OBJECTS) $(TARGET)
+
+.PHONY: all clean

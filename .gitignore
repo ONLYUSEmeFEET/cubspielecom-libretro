@@ -1,0 +1,16 @@
+build/
+*.o
+*.obj
+*.dll
+*.so
+*.dylib
+*.exe
+*.bc
+*.srm
+*.state
+*.ppm
+*.png
+desktop.ini
+**/desktop.ini
+roms/
+system/

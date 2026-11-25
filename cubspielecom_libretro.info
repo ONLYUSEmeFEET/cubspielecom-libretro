@@ -1,0 +1,40 @@
+# Software Information
+display_name = "Tiger - Game.com (Cub Spiele.Com)"
+authors = "AJ Ryan (ONLYUSEmeFEET)"
+supported_extensions = "tgc|bin|rom"
+corename = "Cub Spiele.Com"
+categories = "Emulator"
+license = "MIT"
+permissions = ""
+display_version = "0.1.0"
+
+# Hardware Information
+manufacturer = "Tiger Electronics"
+systemname = "Game.com"
+systemid = "gamecom"
+
+# Libretro Features
+supports_no_game = "true"
+savestate = "true"
+savestate_features = "serialized"
+cheats = "false"
+input_descriptors = "true"
+memory_descriptors = "false"
+libretro_saves = "true"
+core_options = "true"
+core_options_version = "1.0"
+load_subsystem = "false"
+hw_render = "false"
+needs_fullpath = "false"
+disk_control = "false"
+is_experimental = "true"
+
+# Firmware / BIOS
+firmware_count = 2
+firmware0_desc = "internal.bin (Game.com 4KB Internal BIOS)"
+firmware0_path = "gamecom/internal.bin"
+firmware0_opt = "false"
+firmware1_desc = "external.bin (Game.com 256KB External Kernel BIOS)"
+firmware1_path = "gamecom/external.bin"
+firmware1_opt = "false"
+notes = "Place internal.bin (4KB) and external.bin (256KB) in RetroArch's system/gamecom/ (or system/) directory."
