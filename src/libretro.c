@@ -22,6 +22,12 @@ static GameComLCD   g_lcd;
 static GameComAudio g_audio;
 static bool         g_bios_loaded = false;
 static bool         g_draw_touch_cursor = true;
+static bool         g_touch_single_click = true;
+static bool         g_prev_pointer_down = false;
+static int          g_click_pulse_frames = 0;
+static bool         g_pointer_active = false;
+static int16_t      g_last_cursor_x = SM8521_SCREEN_WIDTH / 2;
+static int16_t      g_last_cursor_y = SM8521_SCREEN_HEIGHT / 2;
 
 #define RETRO_SUBSYSTEM_DUAL_CART 1u
 
@@ -188,6 +194,12 @@ static void check_variables(void) {
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
         g_draw_touch_cursor = (strcmp(var.value, "enabled") == 0);
     }
+
+    var.key = "cubspielecom_touch_mode";
+    var.value = NULL;
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+        g_touch_single_click = (strcmp(var.value, "hold") != 0);
+    }
 }
 
 RETRO_API void retro_set_environment(retro_environment_t cb) {
@@ -210,6 +222,7 @@ RETRO_API void retro_set_environment(retro_environment_t cb) {
             { "cubspielecom_speaker_filter", "28mm Internal Speaker Filter; enabled|disabled" },
             { "cubspielecom_vsync", "Tear-Free V-Sync Latch; enabled|disabled" },
             { "cubspielecom_touch_cursor", "Show Stylus Touch Crosshair; enabled|disabled" },
+            { "cubspielecom_touch_mode", "Stylus Click Mode; single_click|hold" },
             { NULL, NULL }
         };
         cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void *)vars);
@@ -274,6 +287,8 @@ RETRO_API void retro_reset(void) {
     sm8521_reset(&g_cpu);
     gamecom_lcd_reset(&g_lcd);
     gamecom_audio_reset(&g_audio);
+    g_prev_pointer_down = false;
+    g_click_pulse_frames = 0;
 }
 
 RETRO_API bool retro_load_game(const struct retro_game_info *game) {
@@ -386,11 +401,36 @@ RETRO_API void retro_run(void) {
         int16_t px = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
         int16_t py = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
         int16_t pressed = input_state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
-        stylus_pressed = (pressed != 0);
-        stylus_x = (int16_t)(((int32_t)px + 0x7FFF) * SM8521_SCREEN_WIDTH / 0xFFFF);
-        stylus_y = (int16_t)(((int32_t)py + 0x7FFF) * SM8521_SCREEN_HEIGHT / 0xFFFF);
-        if (stylus_x < 0) stylus_x = 0; else if (stylus_x >= SM8521_SCREEN_WIDTH) stylus_x = SM8521_SCREEN_WIDTH - 1;
-        if (stylus_y < 0) stylus_y = 0; else if (stylus_y >= SM8521_SCREEN_HEIGHT) stylus_y = SM8521_SCREEN_HEIGHT - 1;
+        bool raw_down = (pressed != 0);
+
+        if (px != 0 || py != 0 || raw_down) {
+            g_pointer_active = true;
+            int32_t sx = ((int32_t)px + 0x7FFF) * SM8521_SCREEN_WIDTH / 0xFFFF;
+            int32_t sy = ((int32_t)py + 0x7FFF) * SM8521_SCREEN_HEIGHT / 0xFFFF;
+            if (sx < 0) sx = 0; else if (sx >= SM8521_SCREEN_WIDTH) sx = SM8521_SCREEN_WIDTH - 1;
+            if (sy < 0) sy = 0; else if (sy >= SM8521_SCREEN_HEIGHT) sy = SM8521_SCREEN_HEIGHT - 1;
+            g_last_cursor_x = (int16_t)sx;
+            g_last_cursor_y = (int16_t)sy;
+        }
+        stylus_x = g_last_cursor_x;
+        stylus_y = g_last_cursor_y;
+
+        if (g_touch_single_click) {
+            if (raw_down && !g_prev_pointer_down) {
+                /* Rising edge: fire a single 4-frame tap pulse so holding the mouse never auto-repeats */
+                g_click_pulse_frames = 4;
+            }
+            if (g_click_pulse_frames > 0) {
+                stylus_pressed = true;
+                g_click_pulse_frames--;
+            } else {
+                stylus_pressed = false;
+            }
+        } else {
+            stylus_pressed = raw_down;
+            g_click_pulse_frames = 0;
+        }
+        g_prev_pointer_down = raw_down;
     }
 
     sm8521_set_input(&g_cpu, buttons, stylus_pressed, stylus_x, stylus_y);
@@ -399,7 +439,7 @@ RETRO_API void retro_run(void) {
     sm8521_run_frame(&g_cpu);
 
     gamecom_lcd_render(&g_lcd, g_cpu.display_buffer,
-                       g_draw_touch_cursor && stylus_pressed, stylus_x, stylus_y);
+                       g_draw_touch_cursor && g_pointer_active, stylus_x, stylus_y);
 
     if (video_cb) {
         video_cb(g_lcd.fb_xrgb8888, SM8521_SCREEN_WIDTH, SM8521_SCREEN_HEIGHT,
