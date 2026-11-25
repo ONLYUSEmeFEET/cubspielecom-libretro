@@ -1,0 +1,91 @@
+name: Build Libretro Cores
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows-x64:
+    name: Windows x64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc make zip
+      - name: Build cubspielecom_libretro.dll
+        run: |
+          make -f Makefile.libretro platform=win
+          gcc -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter -Iinclude -Isrc tests/smoke_test.c src/sm8521.c src/lcd.c src/audio.c -o smoke_test.exe -lm
+          zip -j cubspielecom_libretro-win64.zip cubspielecom_libretro.dll cubspielecom_libretro.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cubspielecom_libretro-win64
+          path: cubspielecom_libretro-win64.zip
+
+  build-linux-x86_64:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build cubspielecom_libretro.so
+        run: |
+          make -f Makefile.libretro platform=unix
+          gcc -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter -Iinclude -Isrc tests/smoke_test.c src/sm8521.c src/lcd.c src/audio.c -o smoke_test -lm
+          zip -j cubspielecom_libretro-linux-x86_64.zip cubspielecom_libretro.so cubspielecom_libretro.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cubspielecom_libretro-linux-x86_64
+          path: cubspielecom_libretro-linux-x86_64.zip
+
+  build-macos-universal:
+    name: macOS Universal
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build cubspielecom_libretro.dylib (arm64 + x86_64)
+        run: |
+          make -f Makefile.libretro platform=osx CC="clang -arch arm64"
+          mv cubspielecom_libretro.dylib cubspielecom_libretro_arm64.dylib
+          make -f Makefile.libretro platform=osx clean
+          make -f Makefile.libretro platform=osx CC="clang -arch x86_64"
+          mv cubspielecom_libretro.dylib cubspielecom_libretro_x86_64.dylib
+          lipo -create cubspielecom_libretro_arm64.dylib cubspielecom_libretro_x86_64.dylib -output cubspielecom_libretro.dylib
+          lipo -info cubspielecom_libretro.dylib
+          zip -j cubspielecom_libretro-macos-universal.zip cubspielecom_libretro.dylib cubspielecom_libretro.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cubspielecom_libretro-macos-universal
+          path: cubspielecom_libretro-macos-universal.zip
+
+  build-android:
+    name: Android (arm64-v8a & armeabi-v7a)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Android libretro cores
+        run: |
+          NDK_ROOT="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME}}"
+          TOOLCHAIN="${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p dist/arm64-v8a dist/armeabi-v7a
+
+          make -f Makefile.libretro platform=android CC="${TOOLCHAIN}/aarch64-linux-android21-clang"
+          cp cubspielecom_libretro_android.so dist/arm64-v8a/cubspielecom_libretro_android.so
+          make -f Makefile.libretro platform=android clean
+
+          make -f Makefile.libretro platform=android CC="${TOOLCHAIN}/armv7a-linux-androideabi21-clang"
+          cp cubspielecom_libretro_android.so dist/armeabi-v7a/cubspielecom_libretro_android.so
+
+          cp cubspielecom_libretro.info dist/
+          (cd dist && zip -r ../cubspielecom_libretro-android.zip .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cubspielecom_libretro-android
+          path: cubspielecom_libretro-android.zip

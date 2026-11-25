@@ -220,6 +220,32 @@ struct retro_game_info
    const char *meta;
 };
 
+struct retro_subsystem_memory_info
+{
+   const char *extension;
+   unsigned    type;
+};
+
+struct retro_subsystem_rom_info
+{
+   const char *desc;
+   const char *valid_extensions;
+   bool        need_fullpath;
+   bool        block_extract;
+   bool        required;
+   const struct retro_subsystem_memory_info *memory;
+   unsigned    num_memory;
+};
+
+struct retro_subsystem_info
+{
+   const char *desc;
+   const char *ident;
+   const struct retro_subsystem_rom_info *roms;
+   unsigned    num_roms;
+   unsigned    id;
+};
+
 typedef bool (RETRO_CALLCONV *retro_environment_t)(unsigned cmd, void *data);
 typedef void (RETRO_CALLCONV *retro_video_refresh_t)(const void *data, unsigned width, unsigned height, size_t pitch);
 typedef void (RETRO_CALLCONV *retro_audio_sample_t)(int16_t left, int16_t right);

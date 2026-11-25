@@ -17,6 +17,7 @@ A pure C99 **libretro** core for the 1997 **Tiger Game.com** (Sharp SM8521) hand
   - `RETRO_DEVICE_JOYPAD` (D-Pad, A/B/C/D, Menu, Pause, Sound) + `RETRO_DEVICE_POINTER` (touchscreen / mouse stylus across the 13×10 hardware touch matrix)
   - `RETRO_MEMORY_SAVE_RAM` (8KB NVRAM `.srm`) & `RETRO_MEMORY_SYSTEM_RAM` (1KB internal RAM)
   - Deterministic save states (`retro_serialize` / `retro_unserialize`)
+  - **Dual-Cartridge Subsystem** (`gamecom_dual_cart`) for loading both Slot 1 and Slot 2 cartridges simultaneously via RetroArch's Subsystems menu
   - Supports booting with no cartridge (`supports_no_game = true`) straight into the Game.com BIOS PDA/Solitaire menu
 
 ## BIOS Setup

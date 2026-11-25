@@ -22,6 +22,18 @@ static GameComAudio g_audio;
 static bool         g_bios_loaded = false;
 static bool         g_draw_touch_cursor = true;
 
+#define RETRO_SUBSYSTEM_DUAL_CART 1u
+
+static const struct retro_subsystem_rom_info g_dual_cart_roms[] = {
+    { "Cartridge Slot 1", "tgc|bin|rom", false, false, true,  NULL, 0 },
+    { "Cartridge Slot 2", "tgc|bin|rom", false, false, false, NULL, 0 }
+};
+
+static const struct retro_subsystem_info g_subsystems[] = {
+    { "Dual Cartridge (Slot 1 + Slot 2)", "gamecom_dual_cart", g_dual_cart_roms, 2, RETRO_SUBSYSTEM_DUAL_CART },
+    { NULL, NULL, NULL, 0, 0 }
+};
+
 static void fallback_log(enum retro_log_level level, const char *fmt, ...) {
     (void)level;
     va_list va;
@@ -163,6 +175,7 @@ RETRO_API void retro_set_environment(retro_environment_t cb) {
             { NULL, NULL }
         };
         cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void *)vars);
+        cb(RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO, (void *)g_subsystems);
     }
 }
 
@@ -269,7 +282,20 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game) {
 }
 
 RETRO_API bool retro_load_game_special(unsigned game_type, const struct retro_game_info *info, size_t num_info) {
-    (void)game_type;
+    if (game_type == RETRO_SUBSYSTEM_DUAL_CART && info && num_info >= 1) {
+        if (!retro_load_game(&info[0])) {
+            return false;
+        }
+        if (num_info >= 2 && info[1].data && info[1].size > 0) {
+            sm8521_load_cartridge(&g_cpu, (const uint8_t *)info[1].data, info[1].size, 2);
+            if (log_cb) {
+                log_cb(RETRO_LOG_INFO, "[Cub Spiele.Com] Dual Cartridge: loaded Slot 2 (%lu bytes)\n",
+                       (unsigned long)info[1].size);
+            }
+        }
+        retro_reset();
+        return true;
+    }
     if (num_info > 0 && info) {
         return retro_load_game(&info[0]);
     }
