@@ -91,7 +91,9 @@ else ifeq ($(platform), ctr)
 endif
 
 ifeq ($(STATIC_LINKING), 1)
-  TARGET := $(TARGET_NAME)_libretro_$(platform).a
+  ifeq ($(TARGET),)
+    TARGET := $(TARGET_NAME)_libretro_$(platform).a
+  endif
   CFLAGS += -DSTATIC_LINKING
 endif
 
